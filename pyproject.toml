@@ -1,0 +1,43 @@
+# =============================================================================
+# Isambard note (same policy as MARLLLM): the GPU venv is built by
+# slurm/install_env.sh following the Isambard vLLM tutorial recipe
+# (torch+cu129, vllm[flashinfer]==0.15.1). Do NOT `uv sync` against that venv —
+# it will re-resolve torch from PyPI defaults and break vLLM. vLLM is
+# deliberately NOT a declared dependency here for that reason.
+#
+# On a login node (no GPU): `uv sync` gives you the pure-python core + dev
+# tools, enough to run the full test suite against the mock engine.
+# =============================================================================
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "evollm"
+version = "0.1.0"
+description = "Gradient-free evolution as a substrate for in-context surprise minimisation"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "numpy>=1.26",
+    "pyyaml>=6.0",
+    "safetensors>=0.4",
+]
+
+[project.scripts]
+evollm = "evollm.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/evollm"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

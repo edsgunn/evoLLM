@@ -1,0 +1,24 @@
+#!/bin/bash -l
+# §6 precheck: mate-handshake base rate under zero adapters (frozen base
+# model). Selection cannot act until reproduction has occurred at least once;
+# if random/base agents essentially never complete a handshake, the
+# population dies before generation one and the main run yields nothing.
+
+#SBATCH --job-name=evollm_precheck
+#SBATCH --nodes=1
+#SBATCH --gpus=1
+#SBATCH --cpus-per-gpu=8
+#SBATCH --time=04:00:00
+#SBATCH --partition=workq
+#SBATCH --output=/lus/lfs1aip2/projects/a5l/egunn/projects/evoLLM/slurm_logs/precheck_%j.out
+#SBATCH --error=/lus/lfs1aip2/projects/a5l/egunn/projects/evoLLM/slurm_logs/precheck_%j.err
+
+set -euo pipefail
+REPO=/lus/lfs1aip2/projects/a5l/egunn/projects/evoLLM
+cd "$REPO"
+module purge
+module load cudatoolkit
+module load brics/nccl
+source "$REPO/.venv/bin/activate"
+
+evollm precheck-handshake -c configs/single_gpu.yaml --steps 20000

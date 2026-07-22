@@ -1,0 +1,52 @@
+# Full GH200 node: 4 rooms = 4 GPUs, complete intra-node graph (§2.1).
+# The topology is read off the hardware: within a node every GPU pair shares
+# the same interconnect, so the graph is complete; multi-node topologies
+# would add sparser inter-node edges.
+run_name: node-4room
+seed: 0
+backend: vllm
+
+model:
+  name: Qwen/Qwen2.5-1.5B-Instruct
+  dtype: bfloat16
+  max_model_len: 8192
+
+world:
+  rooms:
+    - {id: gpu0, gpu: 0}
+    - {id: gpu1, gpu: 1}
+    - {id: gpu2, gpu: 2}
+    - {id: gpu3, gpu: 3}
+  edges: complete
+  block_size: 16
+  eviction: requester      # switch to random_holder for the §2.5 comparison
+  initial_population_per_room: 16
+  max_action_tokens: 128
+  mate_window_tokens: 64
+  viability_probe_turns: 3
+
+genome:
+  rank: 16
+  alpha: 32
+  target_modules: [q_proj, k_proj, v_proj, o_proj]
+  init_scale: 0.02
+  mutation_std: 0.01
+
+engine:
+  gpu_memory_utilization: 0.85
+  max_loras: 8
+  max_cpu_loras: 128
+  max_num_seqs: 64
+  enable_prefix_caching: true
+  enable_chunked_prefill: true
+  safety_margin_blocks: 128
+  adapter_dir: /dev/shm/evollm
+
+sampling:
+  temperature: 1.0
+  top_p: 1.0
+
+run:
+  max_world_steps: 500000
+  snapshot_every_steps: 20000
+  occupancy_every_steps: 2000

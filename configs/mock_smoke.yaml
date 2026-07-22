@@ -1,0 +1,32 @@
+# Mock-backend smoke run: full environment dynamics, no GPU, seconds to run.
+#   uv run evollm run -c configs/mock_smoke.yaml
+run_name: mock-smoke
+seed: 0
+backend: mock
+
+world:
+  rooms:
+    - {id: r0, capacity_blocks: 3000}
+    - {id: r1, capacity_blocks: 3000}
+  edges: complete
+  block_size: 16
+  eviction: requester
+  initial_population_per_room: 6
+  max_action_tokens: 64
+  mate_window_tokens: 64
+  viability_probe_turns: 3
+
+genome:
+  rank: 4
+  alpha: 8
+  init_scale: 0.02
+  mutation_std: 0.01
+
+mock:
+  adapter_blocks: 2
+  policy: heuristic
+
+run:
+  max_world_steps: 20000
+  snapshot_every_steps: 5000
+  occupancy_every_steps: 1000
