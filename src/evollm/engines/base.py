@@ -14,8 +14,9 @@ class TurnToken:
 
 @dataclass(frozen=True)
 class TurnEnded:
-    """The action turn is over. natural=True means the model sampled the
-    turn-end token; False means the max_action_tokens cap forced it."""
+    """The action turn is over: the model sampled the turn-end token, or the
+    physical context budget ran out. A turn also ends when the world sees an
+    action tag close, which the controller handles by aborting the handle."""
     natural: bool
 
 
@@ -39,6 +40,19 @@ class EngineBackend(ABC):
     async def start(self) -> None: ...
     async def stop(self) -> None: ...
 
+    def block_prefix(self, role: str, first: bool = False) -> list[int]:
+        """Tokens that open a chat block for `role` ("system"/"user"/"assistant").
+
+        Instruct models are trained on `<|im_start|>{role}\n ... <|im_end|>\n`
+        and nothing else. Feeding them a bare stream of content separated by
+        `<|im_end|>`, with no role markers, is out of distribution for every
+        token they produce — and is the most likely cause of the empty and
+        malformed turns that dominated every run. The trailing newline of a
+        block is carried on the *next* block's prefix, so a block still ends
+        exactly at the turn-end token the queue machinery swaps on.
+        """
+        return []
+
     @abstractmethod
     def tokenize(self, text: str) -> list[int]: ...
 
@@ -55,9 +69,25 @@ class EngineBackend(ABC):
     def start_turn(self, agent_id: str, context: list[int],
                    max_tokens: int) -> TurnHandle: ...
 
-    def integrity_check(self) -> None:
-        """Raise ExperimentIntegrityError if the substrate has interfered —
-        e.g. the engine preempted a sequence (§4.3). Called every step."""
+    def poll_preemptions(self) -> int:
+        """Engine preemptions since the last poll, for this room's engine.
+
+        A preemption does not corrupt anything — vLLM requeues the request with
+        its generated tokens intact and recomputes the prefix — but it means the
+        scheduler ran out of working room, so the controller records it and
+        aborts if it becomes systematic (§4.3). Backends that cannot preempt
+        return 0."""
+        return 0
+
+    def pool_blocks(self) -> int | None:
+        """Physical KV blocks the engine actually has, or None if unknown.
+
+        Distinct from `capacity_blocks`, which is the room's POLICY claim. The
+        gap between them is the only memory the engine may use that the block
+        economy has not charged anyone for, and it is what bounds how far a
+        request may run ahead of the world clock (see
+        RoomController._turn_budget)."""
+        return None
 
     def capacity_blocks(self) -> int | None:
         """Engine-derived authoritative pool size for the room, if the

@@ -84,15 +84,25 @@ def write_peft_adapter(genome: Genome, model_name: str, path: Path) -> None:
 
 
 class _PreemptionWatchdog:
-    """StatLogger that counts engine preemptions. Any preemption means the
-    engine tried to absorb an allocation failure that the block economy says
-    cannot happen — an integrity violation, not a recoverable hiccup."""
+    """StatLogger that counts engine preemptions.
 
-    instances: list["_PreemptionWatchdog"] = []
+    A preemption is a PERFORMANCE event, not a corruption. vLLM's
+    `_preempt_request` frees the request's KV blocks and resets
+    `num_computed_tokens` to 0, but leaves `_output_token_ids` untouched: the
+    request returns to the waiting queue, recomputes its prefix, and carries on
+    from exactly where it was. No token is lost, none is emitted twice, and no
+    agent dies of it — deaths are decided by this project's BlockPool, never by
+    the engine. What a preemption does mean is that the room's capacity claim
+    is close enough to the engine's real pool for the scheduler to run out of
+    working room, which is worth knowing and worth logging.
+
+    Instances are handed to a per-engine sink rather than a class-level list.
+    Four rooms share one process, and a shared counter meant a single
+    preemption in one room aborted all four.
+    """
 
     def __init__(self, vllm_config, engine_index: int = 0):
         self.preempted = 0
-        _PreemptionWatchdog.instances.append(self)
 
     def record(self, scheduler_stats=None, iteration_stats=None,
                *args, **kwargs):
@@ -156,8 +166,20 @@ class VLLMEngine(EngineBackend):
         self._turn_counter = itertools.count()
         self._adapter_root = Path(cfg.engine.adapter_dir) / cfg.run_name / room.id
         self._num_gpu_blocks: int | None = None
+        self._watchdogs: list[_PreemptionWatchdog] = []
+        self._preempted_seen = 0
 
     async def start(self) -> None:
+        # Checked before the heavy imports so a config error costs nothing.
+        # This reached vLLM as the literal string "auto" once, surfacing as an
+        # opaque TypeError deep in engine construction. Every entry point that
+        # builds an engine must call cli.prepare() first.
+        if not isinstance(self.cfg.model.max_model_len, int):
+            raise ValueError(
+                f"model.max_model_len is {self.cfg.model.max_model_len!r}, not "
+                "resolved to an int — call evollm.cli.prepare(cfg) before "
+                "constructing an engine")
+
         from transformers import AutoTokenizer
         from vllm.engine.arg_utils import AsyncEngineArgs
         from vllm.usage.usage_lib import UsageContext
@@ -178,6 +200,7 @@ class VLLMEngine(EngineBackend):
             model=self.cfg.model.name,
             dtype=self.cfg.model.dtype,
             max_model_len=self.cfg.model.max_model_len,
+            hf_overrides=self._hf_overrides() or None,
             gpu_memory_utilization=ecfg.gpu_memory_utilization,
             block_size=self.cfg.world.block_size,
             enable_lora=True,
@@ -192,13 +215,60 @@ class VLLMEngine(EngineBackend):
             swap_space=0,
             disable_log_stats=False,
         )
+        sink = self._watchdogs
+
+        class _BoundWatchdog(_PreemptionWatchdog):
+            def __init__(self, vllm_config, engine_index: int = 0):
+                super().__init__(vllm_config, engine_index)
+                sink.append(self)
+
         self.engine = AsyncLLM.from_engine_args(
             args,
             usage_context=UsageContext.ENGINE_CONTEXT,
-            stat_loggers=[_PreemptionWatchdog],
+            stat_loggers=[_BoundWatchdog],
         )
         cache_cfg = self.engine.vllm_config.cache_config
         self._num_gpu_blocks = cache_cfg.num_gpu_blocks
+        claimed = self.room.capacity_blocks
+        if claimed:
+            head = self._num_gpu_blocks - claimed
+            print(f"[{self.room.id}] engine pool {self._num_gpu_blocks:,} blocks; "
+                  f"economy claims {claimed:,}; headroom {head:,} "
+                  f"({head / self._num_gpu_blocks * 100:.0f}%)")
+
+    def _hf_overrides(self) -> dict:
+        """Let agents live past the base model's trained context window.
+
+        The rope cos/sin cache is built to config.max_position_embeddings
+        (rotary_embedding/base.py: torch.arange(max_position_embeddings)), and
+        lookup is an unchecked index_select. Raising max_model_len alone —
+        e.g. via VLLM_ALLOW_LONG_MAX_MODEL_LEN — leaves the cache short and
+        turns an over-long context into an out-of-bounds CUDA read. Overriding
+        max_position_embeddings grows the cache with it, so positions beyond
+        the trained window degrade quality (which selection is free to act on)
+        instead of corrupting memory.
+        """
+        from transformers import AutoConfig
+
+        overrides: dict = {}
+        model_cfg = self.cfg.model
+        if model_cfg.rope_scaling:
+            overrides["rope_scaling"] = model_cfg.rope_scaling
+        if not model_cfg.extend_context:
+            return overrides
+        hf_config = AutoConfig.from_pretrained(model_cfg.name)
+        native = getattr(hf_config, "max_position_embeddings", None)
+        if native is not None and model_cfg.max_model_len > native:
+            overrides["max_position_embeddings"] = model_cfg.max_model_len
+            head_dim = getattr(hf_config, "head_dim", None) or \
+                hf_config.hidden_size // hf_config.num_attention_heads
+            cache_gib = model_cfg.max_model_len * head_dim * 4 / 1024**3
+            print(f"[{self.room.id}] extending context {native} -> "
+                  f"{model_cfg.max_model_len} tokens "
+                  f"({model_cfg.max_model_len / native:.1f}x the trained "
+                  f"window; rope cache ~{cache_gib:.2f} GiB). Behaviour past "
+                  f"{native} is out of distribution by design.")
+        return overrides
 
     def _resolve_turn_end_id(self) -> int:
         for token in ("<|im_end|>",):
@@ -213,7 +283,20 @@ class VLLMEngine(EngineBackend):
         shutil.rmtree(self._adapter_root, ignore_errors=True)
 
     # ── capacity (§4.2) ───────────────────────────────────────────────────
+    def pool_blocks(self) -> int | None:
+        return self._num_gpu_blocks
+
     def capacity_blocks(self) -> int | None:
+        """Authoritative pool size for the room.
+
+        The engine's measured KV pool is only an upper bound. On a 96 GB GH200
+        a 1.5B model yields ~2.9M tokens of KV, which is hundreds of times the
+        model's context window — so an agent would hit max_model_len long
+        before the room could ever starve, and death by scarcity would be
+        unreachable. Capacity is therefore also clamped so that even a lone
+        agent holding the entire pool stays under the context ceiling; World
+        re-checks this invariant for every room (§4.3).
+        """
         if self._num_gpu_blocks is None:
             return None
         capacity = self._num_gpu_blocks - self.cfg.engine.safety_margin_blocks
@@ -224,6 +307,15 @@ class VLLMEngine(EngineBackend):
         return capacity
 
     # ── tokenizer ─────────────────────────────────────────────────────────
+    def block_prefix(self, role: str, first: bool = False) -> list[int]:
+        if not self.cfg.world.chat_format:
+            return []
+        # "<|im_end|>\n<|im_start|>{role}\n" is the trained boundary; the
+        # turn-end token itself is appended by the controller, so the newline
+        # that follows it opens the next block here.
+        lead = "" if first else "\n"
+        return self.tokenize(f"{lead}<|im_start|>{role}\n")
+
     def tokenize(self, text: str) -> list[int]:
         return self.tokenizer.encode(text, add_special_tokens=False)
 
@@ -281,11 +373,9 @@ class VLLMEngine(EngineBackend):
         return VLLMTurnHandle(self.engine, request_id, generator, self.turn_end_id)
 
     # ── integrity (§4.3) ──────────────────────────────────────────────────
-    def integrity_check(self) -> None:
-        preempted = sum(w.preempted for w in _PreemptionWatchdog.instances)
-        if preempted:
-            raise ExperimentIntegrityError(
-                f"engine preempted {preempted} sequence(s): the substrate "
-                "absorbed an allocation failure the block economy says cannot "
-                "happen. Deaths since the last clean step are unattributable; "
-                "raise safety_margin_blocks or lower capacity.")
+    def poll_preemptions(self) -> int:
+        """Preemptions by THIS engine since the last poll."""
+        total = sum(w.preempted for w in self._watchdogs)
+        new = total - self._preempted_seen
+        self._preempted_seen = total
+        return new

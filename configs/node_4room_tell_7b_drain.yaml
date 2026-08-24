@@ -1,0 +1,123 @@
+# STATUS: SUPERSEDED — do not submit without checking why.
+# Ran as job 6059671. The reference dataset for the degradation and
+# heritability analyses. Superseded operationally: 4,000/8,000-block rooms
+# and head-count refill are both obsolete. See
+# runs/node_4room_tell_7b_drain_6059671/NOTES.md.
+#
+# Full GH200 node: 4 rooms = 4 GPUs, complete intra-node graph (§2.1).
+# The topology is read off the hardware: within a node every GPU pair shares
+# the same interconnect, so the graph is complete; multi-node topologies
+# would add sparser inter-node edges.
+run_name: node-4room-tell-7b-drain
+seed: 0
+backend: vllm
+
+model:
+  # 7B against the 1.5B pair. Every measured blocker has been protocol
+  # competence rather than the environment — 58% malformed turns, 0.21% valid
+  # agreements — and §6's latent-circuit risk says selection over adapters
+  # cannot install a capability the base lacks. Adapter grows 8.7MB -> 20.2MB
+  # (19 -> 22 blocks), so the same 8000-block room seats 363 rather than 421.
+  name: Qwen/Qwen2.5-7B-Instruct
+  dtype: bfloat16
+  max_model_len: auto
+  extend_context: true
+
+# capacity_blocks is explicit, not the engine's profiled KV pool — see
+# configs/single_gpu.yaml for why (§4.3). Rooms differ in size here: real
+# devices in a real graph need not be identical, and unequal capacity gives
+# the niche structure of §2.6 something to differentiate over from step zero.
+# The ceiling is derived from the largest room, so it binds in none of them.
+world:
+  rooms:
+    - {id: gpu0, gpu: 0, capacity_blocks: 8000}
+    - {id: gpu1, gpu: 1, capacity_blocks: 8000}
+    - {id: gpu2, gpu: 2, capacity_blocks: 4000}
+    - {id: gpu3, gpu: 3, capacity_blocks: 4000}
+  edges: complete
+  block_size: 16
+  eviction: requester      # switch to random_holder for the §2.5 comparison
+  initial_population_per_room: 16
+  # Absorb a whole utterance per step, so hearing a 35-token message costs
+  # 35 tokens of context at once while acting costs one token per step.
+  # Under the alternative ("token") every agent's context grew at exactly one
+  # token per step regardless of behaviour: speech cost listeners nothing,
+  # lifetime was independent of what an agent did, and reproduction was
+  # effectively unselectable. Mock A/B at these proportions: 6 generations
+  # under "token" vs 27 under "utterance".
+  # Directed speech only: one generated token becomes exactly one
+# observation token, so the room's information economy closes and queue
+# latency stays bounded. The cost is publicness — no common knowledge.
+  tools: [tell, mate, go]
+  # Utterance absorption, paired against node_4room_tell_token_7b.yaml (job
+  # 6045970) with everything else held identical, including step count.
+  #
+  # That run had a mean observation backlog of 7,333 tokens — roughly 120-180
+  # queued utterances — so an agent read the result of an action ~150 turns
+  # after taking it, and could not associate any outcome with its cause. The
+  # same tell configuration on utterance absorption ran at a backlog of 403.
+  # Token absorption drains one token per step while the room produces
+  # observations far faster, and 7B compounds it by acting more often.
+  # Drain the queue before acting, so an agent always acts on the present.
+  # Paired against the matching read_policy: one run with everything else
+  # identical, including step count.
+  read_policy: drain
+  observation_absorption: utterance
+  mate_window_tokens: 64
+  viability_probe_turns: 3
+
+# Keeping the arena populated (§6, §7). Measured base rates put reproduction
+# far below replacement, so a room runs down to extinction before any lineage
+# can establish. Immigrants perturbed from the base model top the room up
+# whenever it falls below the floor; the population random-walks until some
+# lineage reproduces faster than it dies, after which this stops firing by
+# itself. Nothing here scores or inspects any agent — it counts heads.
+#
+# The result is read off `self-sufficiency = births / (births + refills)` in
+# the report: rising toward 1 is takeoff, flat is a population being carried
+# by immigration. When a room goes takeoff_window_steps needing no immigrant
+# while still producing children, its population is checkpointed to
+# runs/<name>/checkpoints/<room>/takeoff_*, because finding that population is
+# the expensive part of the run. Restart from one with:
+#     evollm run -c <config> --seed-from runs/<name>/checkpoints/<room>/takeoff_XXXXXXXX
+refill:
+  enabled: true
+  min_population: 8
+  check_every_steps: 200
+  takeoff_window_steps: 5000
+  takeoff_min_births: 5
+
+genome:
+  rank: 16
+  alpha: 32
+  target_modules: [q_proj, k_proj, v_proj, o_proj]
+  init_scale: 0.02
+  mutation_std: 0.01
+
+engine:
+  # 7B weights are ~15GB of the 96GB card, leaving ample KV for an 8000-block
+  # room; the ceiling invariant is unchanged (max_model_len derives to 127,649).
+  gpu_memory_utilization: 0.85
+  max_loras: 8
+  max_cpu_loras: 128
+  max_num_seqs: 64
+  enable_prefix_caching: true
+  enable_chunked_prefill: true
+  safety_margin_blocks: 128
+  adapter_dir: /dev/shm/evollm
+
+sampling:
+  temperature: 1.0
+  top_p: 1.0
+
+run:
+  max_world_steps: 700000
+  snapshot_every_steps: 70000
+  occupancy_every_steps: 2000
+  # Raw agent contexts, verbatim, as the model reads them. trace_turns
+  # records what an agent emitted; this records what it saw.
+  # The report's thinking line came out blank across the last batch: turn
+  # events carry thinking_tokens, and trace_turns was precheck-only.
+  trace_turns: 20000
+  context_snapshot_every_steps: 70000
+  context_snapshot_agents: 3

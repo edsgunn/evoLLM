@@ -35,9 +35,7 @@ echo "Node   : $(hostname -s)"
 echo "Date   : $(date)"
 echo "================================================================"
 
-module purge
-module load cudatoolkit
-module load brics/nccl
+source "$REPO/slurm/_env.sh"
 
 export PATH="$HOME/.local/bin:$PATH"
 command -v uv >/dev/null || { echo "[ERROR] uv not found in PATH"; exit 2; }

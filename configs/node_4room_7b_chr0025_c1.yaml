@@ -1,0 +1,167 @@
+# STATUS: queued as Slurm job 6081314 (submitted 2026-08-21).
+# Linkage-dial probe. Read against chr0025 (c=3) and uni0025 (c=112, i.e. uniform).
+#
+# sigma sweep on the chromosomal substrate. Chromosomal crossover is now the
+# default everywhere: it is the only scheme measured to transmit anything
+# heritable (run 6071674, h2 = +0.61, midparent/single-parent ratio 2.78
+# against a theoretical 2.0), where uniform scored 0.39 -- indistinguishable
+# from the shared-environment control, i.e. not inheritance at all. Every arm
+# below therefore varies ONLY the mutation rate, on the crossover mechanism we
+# intend to keep.
+#
+# The linkage dial, at the best sigma we know. Making chromosomal the default
+# raises a question uniform never posed: how many chromosomes? 3 was a guess
+# modelled on early/middle/late layers. chromosomes=1 is a single crossover
+# point across all 112 sites -- the tightest possible linkage, ~1 parent
+# switch per child -- so paired against chr0025 (3 chromosomes, ~3.8 switches)
+# it says whether tighter linkage keeps helping or starts to starve
+# recombination of the ability to combine anything at all.
+run_name: node-4room-7b-chr0025-c1
+seed: 0
+backend: vllm
+
+model:
+  name: Qwen/Qwen2.5-7B-Instruct
+  dtype: bfloat16
+  max_model_len: auto
+  extend_context: true
+
+world:
+  rooms:
+    - {id: gpu0, gpu: 0, capacity_blocks: 48000}
+    - {id: gpu1, gpu: 1, capacity_blocks: 48000}
+    - {id: gpu2, gpu: 2, capacity_blocks: 48000}
+    - {id: gpu3, gpu: 3, capacity_blocks: 48000}
+  edges: complete
+  block_size: 16
+  eviction: requester
+  initial_population_per_room: 32
+  tools: [tell, mate, go]
+  chat_format: true
+  read_policy: drain
+  observation_absorption: utterance
+  mate_window_tokens: 64
+  viability_probe_turns: 3
+
+
+refill:
+  # OFF. Immigration was scaffolding for getting a population off the ground,
+  # and the evidence says it is no longer load-bearing: in lowmut (6071675)
+  # every one of the 39 refills fired inside the first 3,500 steps of a 93,586
+  # step run, gpu1 needed none at all, and thereafter the rooms sustained
+  # themselves at 27-52 agents with a worst-case floor of 11. Nothing was being
+  # rescued after bootstrap.
+  #
+  # Worse, those bootstrap refills were an artefact of the old trigger rather
+  # than a need. A young room is empty of BLOCKS while being full of AGENTS --
+  # contexts have not grown yet -- so max_free_fraction could not tell "dying"
+  # from "just started", and put 28 fresh gen-0 genomes into gpu3 while its
+  # population was peaking at 91. That is contamination of generation 0 at
+  # exactly the point every later generation is measured against.
+  #
+  # With this off, self-sufficiency is not a statistic to be reported, it is a
+  # precondition for the run existing at all: births are the ONLY source of new
+  # agents after seeding. A population that cannot reproduce shrinks, and if
+  # the world empties, World logs an extinction event and stops (§7) -- which
+  # is a clean, interpretable negative rather than a subsidised ambiguity.
+  enabled: false
+  min_population: 0
+  max_free_fraction: null
+  check_every_steps: 500
+  max_per_check: 4
+  takeoff_window_steps: 20000
+  takeoff_min_births: 5
+
+# ── WHAT WE EXPECT TO LEARN ───────────────────────────────────────────────
+# The linkage dial, at the best sigma we know. Making chromosomal crossover the
+# default raised a question uniform never posed: how many chromosomes? 3 was a
+# guess modelled on early/middle/late layers, with nothing behind it.
+#
+# The dial has a closed form. For c chromosomes over n = 112 sites with L = n/c:
+#
+#     E[parent switches per child] = c*(L-1)/(L+1) + (c-1)/2
+#
+# giving 1.0 switches at c=1, 3.8 at c=3, and 55.5 at c=112 -- which is exactly
+# uniform crossover, since a one-site chromosome reduces to a fair coin. So the
+# three sigma=0.0025 runs are already a three-point sweep on this dial:
+#
+#     chr0025_c1 (this)   c=1     1.0 switches   tightest possible linkage
+#     chr0025             c=3     3.8 switches
+#     uni0025             c=112  55.5 switches   no linkage at all
+#
+# Expected if linkage is simply good: this arm performs best, and the ordering is
+# monotone in switch count.
+#
+# Expected if there is an optimum: c=1 underperforms c=3, because a single
+# crossover point means a child is nearly a clone of one parent -- recombination
+# stops being able to COMBINE anything, and the population loses the ability to
+# bring two useful mutations from different lineages together. That would show
+# up as slower improvement despite higher heritability, which is the diagnostic
+# signature worth watching for: faithful transmission of nothing new.
+#
+# The three points are badly spaced (1, 3.8, 55.5 switches) and a proper sweep
+# would fill the gap at c = 8, 16, 32 -> 10.4, 19.5, 33.3 switches. Deferred.
+
+genome:
+  rank: 16
+  alpha: 32
+  target_modules: [q_proj, k_proj, v_proj, o_proj]
+  init_scale: 0.02
+  mutation_std: 0.0025
+  crossover: chromosomal
+  chromosomes: 1
+  mutation: additive
+engine:
+  # lowmut and chromo were both aborted by the preemption guard after a single
+  # transient allocation failure (the counter is cumulative, and any preemption
+  # is an integrity violation by design). The economy still claims 48,000
+  # blocks per room -- unchanged, so these stay comparable to 6071675 -- but
+  # the pool underneath is grown from 75,962 blocks to give the scheduler more
+  # absolute slack for prefill bursts in the dense, fast-turnover regime that
+  # low mutation produces. safety_margin_blocks documents intent; it does not
+  # bind while capacity_blocks is explicit.
+  gpu_memory_utilization: 0.92
+  max_loras: 8
+  # Rooms now hold far more agents, so the CPU-side adapter cache has to hold
+  # them: 256 x 20.2 MB is ~5 GB of host RAM.
+  max_cpu_loras: 256
+  max_num_seqs: 128
+  enable_prefix_caching: true
+  enable_chunked_prefill: true
+  safety_margin_blocks: 4096
+  adapter_dir: /dev/shm/evollm
+
+sampling:
+  temperature: 1.0
+  top_p: 1.0
+
+run:
+  max_world_steps: 400000
+  # Genotype capture. The important part is the INHERITANCE MASK.
+  #
+  #   genome_fingerprints  writes one line per agent at creation to
+  #     <run>/genomes/<room>.jsonl. For a child it records `donors`: one bit
+  #     per site saying which parent supplied it — 112 bits, the actual act of
+  #     inheritance. Without it, descent can only be estimated by the expected
+  #     one-half rule, which is an average over births that never happened.
+  #     With it, descent is resolvable site by site back to the founder that
+  #     really contributed each one, which turns every site into a categorical
+  #     ALLELE that can be tested against behaviour directly. That is a marker
+  #     test with far more power than correlating a site's perturbation
+  #     magnitude with a trait — which is all snapshots alone could support,
+  #     and which produced no replicable hit in lowmut.
+  #
+  #     The same line also carries per-site magnitude summaries (delta_norm,
+  #     rms_a, rms_b). Cost is ~5.5 KB and ~17 ms per agent: ~70 MB and about
+  #     3 minutes over a 12,000-birth run.
+  #
+  #   snapshot_every_steps  full 40 MB genomes for the living, for work that
+  #     needs the actual factors rather than per-site summaries. Raised from
+  #     40,000 to 25,000 (~16 per room, ~32 GB). Full coverage is the
+  #     per-agent records' job now, not the snapshots'.
+  genome_fingerprints: true
+  snapshot_every_steps: 25000
+  occupancy_every_steps: 1000
+  trace_turns: 20000
+  context_snapshot_every_steps: 25000
+  context_snapshot_agents: 3

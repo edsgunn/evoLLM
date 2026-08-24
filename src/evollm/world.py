@@ -40,18 +40,65 @@ class World:
         for room in cfg.world.rooms:
             engine = engines[room.id]
             capacity = room.capacity_blocks
-            if capacity is None:
+            derived = capacity is None
+            if derived:
                 capacity = engine.capacity_blocks()
             if capacity is None:
                 raise ValueError(
                     f"room {room.id}: capacity_blocks not set and the engine "
                     "cannot derive it")
+            capacity = self._enforce_context_ceiling(
+                room.id, capacity, adapter_blocks, derived)
+            if not derived:
+                engine_pool = engine.capacity_blocks()
+                if engine_pool is not None and capacity > engine_pool:
+                    # The controller would hand out blocks the device does not
+                    # have; the engine's only recourse is preemption, which is
+                    # an integrity violation rather than a death (§4.3).
+                    raise ValueError(
+                        f"room {room.id}: capacity_blocks={capacity} exceeds "
+                        f"the engine's usable pool of {engine_pool} blocks. "
+                        "Lower capacity_blocks, raise "
+                        "engine.gpu_memory_utilization, or lower "
+                        "engine.safety_margin_blocks.")
             log = EventLog(base / "events" / f"{room.id}.jsonl")
             self.controllers[room.id] = RoomController(
                 room_id=room.id, capacity_blocks=capacity,
                 adapter_blocks=adapter_blocks, engine=engine, cfg=cfg,
                 world=self, log=log,
                 rng=np.random.default_rng(self.rng.integers(2**63)))
+
+    def _enforce_context_ceiling(self, room_id: str, capacity: int,
+                                 adapter_blocks: int, derived: bool) -> int:
+        """Scarcity must bind before the model's context window does (§4.3).
+
+        A lone survivor can hold every block in the room, so its context can
+        reach (capacity - adapter_blocks) * block_size tokens. If that exceeds
+        max_model_len the agent hits an infrastructure ceiling rather than a
+        scarcity event — the engine rejects the request and the death, if it
+        happened at all, would not be attributable to the pool. Deriving
+        capacity from the engine clamps to the safe bound; an explicit
+        capacity_blocks that violates it is a config error and raises, because
+        silently shrinking a number the experimenter chose would misreport
+        what was actually run.
+        """
+        block_size = self.cfg.world.block_size
+        max_len = self.cfg.model.max_model_len
+        # vLLM needs prompt + at least one output token to fit, hence < not <=.
+        safe = adapter_blocks + (max_len - 1) // block_size
+        if capacity <= safe:
+            return capacity
+        reachable = (capacity - adapter_blocks) * block_size
+        if not derived:
+            raise ValueError(
+                f"room {room_id}: capacity_blocks={capacity} lets a single "
+                f"agent reach {reachable} tokens, over max_model_len="
+                f"{max_len}. Scarcity would never bind and deaths would be "
+                f"infrastructure artefacts (§4.3). Set capacity_blocks "
+                f"<= {safe}, or raise model.max_model_len.")
+        print(f"[{room_id}] clamping engine-derived capacity {capacity} -> "
+              f"{safe} blocks so scarcity binds before max_model_len={max_len}")
+        return safe
 
     # ── identity and topology ─────────────────────────────────────────────
     def next_agent_id(self) -> str:
@@ -85,18 +132,45 @@ class World:
         return True
 
     # ── seeding ───────────────────────────────────────────────────────────
+    def _checkpoint_genomes(self) -> list[Genome]:
+        """Load a checkpointed population to start from.
+
+        Finding a self-sustaining population is an undirected walk over
+        initialisations and is the expensive part of a run; `seed_from` lets a
+        later run begin where an earlier one got to instead of paying for the
+        search again.
+        """
+        from pathlib import Path
+
+        root = Path(self.cfg.seed_from)
+        if not root.exists():
+            raise ValueError(f"seed_from path does not exist: {root}")
+        files = sorted(root.rglob("*.safetensors"))
+        if not files:
+            raise ValueError(f"seed_from contains no genomes: {root}")
+        print(f"[world] seeding from checkpoint {root} ({len(files)} genomes)")
+        return [Genome.load(f, self.spec) for f in files]
+
     async def seed(self, zero_genomes: bool = False) -> None:
+        pool = self._checkpoint_genomes() if self.cfg.seed_from else None
         for controller in self.controllers.values():
-            for _ in range(self.cfg.world.initial_population_per_room):
-                genome = (Genome.zeros(self.spec) if zero_genomes else
-                          Genome.random(self.spec, self.cfg.genome.init_scale,
-                                        controller.rng))
+            for i in range(self.cfg.world.initial_population_per_room):
+                if pool is not None:
+                    # Cycle if the checkpoint holds fewer agents than a room
+                    # wants; the population is the seed, not a hard roster.
+                    genome = pool[i % len(pool)]
+                elif zero_genomes:
+                    genome = Genome.zeros(self.spec)
+                else:
+                    genome = Genome.random(self.spec, self.cfg.genome.init_scale,
+                                           controller.rng)
                 agent = await controller.seed_agent(genome)
                 if agent is None:
                     raise RuntimeError(
                         f"room {controller.room_id} cannot fit the configured "
                         "initial population's adapters — lower "
                         "initial_population_per_room or raise capacity")
+            controller.finish_seeding()
 
     # ── run ───────────────────────────────────────────────────────────────
     async def run(self, max_steps: int | None = None) -> None:
@@ -107,6 +181,11 @@ class World:
     async def _run_room(self, controller: RoomController, max_steps: int) -> None:
         while not self.stopping and controller.step_count < max_steps:
             if not controller.agents and not controller._pending_arrivals:
+                # An emptied room is refilled rather than declared extinct, if
+                # refill is on: the check normally runs inside run_step, which
+                # an empty room never reaches.
+                if self.cfg.refill.enabled and await controller.refill():
+                    continue
                 # Extinct room: idle until a migrant arrives or the world ends.
                 # The room clock does not tick for an empty room.
                 await asyncio.sleep(0)

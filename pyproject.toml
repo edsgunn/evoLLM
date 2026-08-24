@@ -1,12 +1,22 @@
 # =============================================================================
 # Isambard note (same policy as MARLLLM): the GPU venv is built by
 # slurm/install_env.sh following the Isambard vLLM tutorial recipe
-# (torch+cu129, vllm[flashinfer]==0.15.1). Do NOT `uv sync` against that venv —
-# it will re-resolve torch from PyPI defaults and break vLLM. vLLM is
-# deliberately NOT a declared dependency here for that reason.
+# (torch+cu129, vllm[flashinfer]==0.15.1). vLLM is deliberately NOT a declared
+# dependency here, because uv must never try to resolve it.
 #
-# On a login node (no GPU): `uv sync` gives you the pure-python core + dev
-# tools, enough to run the full test suite against the mock engine.
+# DO NOT run `uv sync` OR `uv run` in this directory without setting
+# UV_PROJECT_ENVIRONMENT first. Both commands sync uv's default project
+# environment, which is ./.venv — the GPU venv. That silently re-resolves
+# declared dependencies inside it; it is how numpy was once upgraded to 2.5,
+# breaking numba and with it every engine start.
+#
+# Login-node work uses a separate environment:
+#     export UV_PROJECT_ENVIRONMENT=.venv-dev
+#     uv sync && uv run pytest
+# or just `./dev.sh pytest`, which sets it for you.
+#
+# To change the GPU venv, use `uv pip install --python .venv/bin/python <pkg>`,
+# which touches only what you name, or re-run slurm/install_env.sh.
 # =============================================================================
 
 [build-system]
@@ -21,7 +31,11 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = [
-    "numpy>=1.26",
+    # Upper bound is not cosmetic: vLLM imports numba, and numba requires
+    # numpy<2.3. An unpinned numpy resolves to 2.5 and breaks engine startup
+    # with "Numba needs NumPy 2.2 or less" — a failure that only shows up on
+    # the GPU, long after the install looked fine.
+    "numpy>=1.26,<2.3",
     "pyyaml>=6.0",
     "safetensors>=0.4",
 ]

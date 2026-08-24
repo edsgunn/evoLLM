@@ -16,12 +16,10 @@ set -euo pipefail
 REPO=/lus/lfs1aip2/projects/a5l/egunn/projects/evoLLM
 CONFIG="${CONFIG:-configs/node_4room.yaml}"
 cd "$REPO"
-module purge
-module load cudatoolkit
-module load brics/nccl
+source "$REPO/slurm/_env.sh"
 source "$REPO/.venv/bin/activate"
 
 echo "config: $CONFIG  job: ${SLURM_JOB_ID:-interactive}  node: $(hostname -s)"
 nvidia-smi -L || true
 
-evollm run -c "$CONFIG" --name "${RUN_NAME:-node4room_${SLURM_JOB_ID:-dev}}"
+evollm run -c "$CONFIG" --name "${RUN_NAME:-$(basename "$CONFIG" .yaml)_${SLURM_JOB_ID:-dev}}"

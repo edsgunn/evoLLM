@@ -1,0 +1,105 @@
+# STATUS: SUPERSEDED — do not submit without checking why.
+# Single-room bring-up variant with both speech acts. Debugging shape, not
+# an experiment.
+#
+# One room, one GH200 GPU: the first real-run shape. No movement (a one-room
+# graph has no edges), which isolates the block economy + handshake dynamics
+# from migration.
+#
+# capacity_blocks is set explicitly and is NOT the engine's measured KV pool:
+# a 96 GB GH200 serving a 1.5B model profiles ~180k blocks, and the engine's
+# surplus over the room is the margin that guarantees it can never preempt
+# (§4.3). Here the room is the scarce thing and the context window is not:
+# max_model_len: auto sizes the ceiling to the whole pool, so an agent can
+# only ever die of scarcity.
+#
+# 8000 blocks = 128k tokens, ~4x Qwen2.5's trained 32k window. Agents will run
+# well past it and degrade; that is deliberate, and selection is free to act
+# on it. Raise capacity_blocks to buy longer lives — the ceiling follows
+# automatically — at the cost of throughput, since attention per token grows
+# with context length. Wall-clock cost only: all world timing is in tokens
+# (§2.3), so slow old agents do not distort the physics.
+run_name: single-gpu-both
+seed: 0
+backend: vllm
+
+model:
+  name: Qwen/Qwen2.5-1.5B-Instruct
+  dtype: bfloat16
+  max_model_len: auto     # derived from the largest room; never binds
+  extend_context: true    # grow the rope cache with it (never OOB-index it)
+  # rope_scaling: {rope_type: yarn, factor: 4.0, original_max_position_embeddings: 32768}
+
+world:
+  rooms:
+    - {id: gpu0, gpu: 0, capacity_blocks: 8000}
+  edges: complete
+  block_size: 16
+  eviction: requester
+  initial_population_per_room: 16
+  # Absorb a whole utterance per step, so hearing a 35-token message costs
+  # 35 tokens of context at once while acting costs one token per step.
+  # Under the alternative ("token") every agent's context grew at exactly one
+  # token per step regardless of behaviour: speech cost listeners nothing,
+  # lifetime was independent of what an agent did, and reproduction was
+  # effectively unselectable. Mock A/B at these proportions: 6 generations
+  # under "token" vs 27 under "utterance".
+  # Both channels. The fan-out multiplier still exists but is chosen,
+# so which channel a lineage uses becomes an evolvable trait: this is the
+# variant that can show whether selection prefers cheap private coordination
+# over expensive public signalling.
+  tools: [say, tell, mate, go]
+  observation_absorption: utterance
+  mate_window_tokens: 64
+  viability_probe_turns: 3
+
+# Keeping the arena populated (§6, §7). Measured base rates put reproduction
+# far below replacement, so a room runs down to extinction before any lineage
+# can establish. Immigrants perturbed from the base model top the room up
+# whenever it falls below the floor; the population random-walks until some
+# lineage reproduces faster than it dies, after which this stops firing by
+# itself. Nothing here scores or inspects any agent — it counts heads.
+#
+# The result is read off `self-sufficiency = births / (births + refills)` in
+# the report: rising toward 1 is takeoff, flat is a population being carried
+# by immigration. When a room goes takeoff_window_steps needing no immigrant
+# while still producing children, its population is checkpointed to
+# runs/<name>/checkpoints/<room>/takeoff_*, because finding that population is
+# the expensive part of the run. Restart from one with:
+#     evollm run -c <config> --seed-from runs/<name>/checkpoints/<room>/takeoff_XXXXXXXX
+refill:
+  enabled: true
+  min_population: 8
+  check_every_steps: 200
+  takeoff_window_steps: 5000
+  takeoff_min_births: 5
+
+genome:
+  rank: 16
+  alpha: 32
+  target_modules: [q_proj, k_proj, v_proj, o_proj]
+  init_scale: 0.02
+  mutation_std: 0.01
+
+engine:
+  gpu_memory_utilization: 0.85
+  max_loras: 8            # GPU-resident working set; measure before raising N (§4.1)
+  max_cpu_loras: 128
+  max_num_seqs: 64
+  enable_prefix_caching: true
+  enable_chunked_prefill: true
+  safety_margin_blocks: 128
+  adapter_dir: /dev/shm/evollm
+
+sampling:
+  temperature: 1.0
+  top_p: 1.0
+
+run:
+  max_world_steps: 200000
+  snapshot_every_steps: 10000
+  occupancy_every_steps: 1000
+  # Raw agent contexts, verbatim, as the model reads them. trace_turns
+  # records what an agent emitted; this records what it saw.
+  context_snapshot_every_steps: 25000
+  context_snapshot_agents: 3

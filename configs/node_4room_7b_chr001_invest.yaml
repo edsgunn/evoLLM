@@ -1,0 +1,221 @@
+# REPRODUCTION COST. chr001_evict (random_holder) plus parental investment:
+# the two changes are set together because the charge is only a cost under an
+# eviction rule that draws its victim in proportion to blocks held.
+#
+# WHY THIS AND NOT A MEMORY TAX
+#
+# Reproduction is currently free to the parents: the child's 22 adapter blocks
+# come out of the room pool and neither parent pays. That is why offspring
+# number has variance 40.2 against a mean of 3.03, why the effective
+# population size is 5.7, and why selection ends up only about twice as strong
+# as drift — weak enough that a behaviour costing 34-40% of reproduction (the
+# room_id tic) could sweep a population anyway.
+#
+# Charging parents invented blocks would have fixed the incentive by wasting
+# real GPU memory on nothing. Charging them the child's OWN adapter costs
+# nothing: the memory is already allocated, already in use, and already
+# exactly as large. Only the ledger moves.
+#
+# WHAT WE EXPECT TO LEARN
+#
+# Whether a real, conserved reproduction cost compresses the reproductive tail
+# enough to make selection effective.
+#
+#   variance in offspring V_k   40.2  ->  lower
+#   effective population Ne      5.7  ->  higher
+#   selection vs drift          ~2x   ->  higher
+#
+# Read against chr001 (6081313, requester, no cost) and chr001_evict (6118397,
+# random_holder alone). The three form a ladder: no cost, hazard proportional
+# to holdings, and hazard plus a reproduction charge.
+#
+# EXPECTED MAGNITUDE, STATED HONESTLY
+#
+# 11 blocks per child against a typical 718-block context budget. Ten living
+# children raise a parent's holdings ~15%, twenty raise them ~31%, and under
+# random_holder hazard tracks holdings, so that is the scale of the extra
+# mortality. This is a nudge, not a wall. If V_k barely moves, the lever with
+# the same zero-waste property is to charge parents a share of the child's
+# whole KV footprint, which grows with the child rather than being fixed at
+# 22 blocks.
+#
+# WHAT WOULD FALSIFY IT
+#
+# Births falling below replacement. Mean offspring must stay near 2; if the
+# charge suppresses reproduction rather than concentrating it, the population
+# shrinks and the run is worse than useless.
+#
+run_name: node-4room-7b-chr001-invest
+seed: 0
+backend: vllm
+
+model:
+  name: Qwen/Qwen2.5-7B-Instruct
+  dtype: bfloat16
+  max_model_len: auto
+  extend_context: true
+
+world:
+  rooms:
+    - {id: gpu0, gpu: 0, capacity_blocks: 48000}
+    - {id: gpu1, gpu: 1, capacity_blocks: 48000}
+    - {id: gpu2, gpu: 2, capacity_blocks: 48000}
+    - {id: gpu3, gpu: 3, capacity_blocks: 48000}
+  edges: complete
+  block_size: 16
+  # THE ONE CHANGE. Under `requester` the agent that asks for a block when the
+  # pool is empty is the one that dies, so hazard tracks THROUGHPUT: you ask
+  # once per 16 tokens, whatever you already hold. Measured consequence across
+  # 51,000 deaths in chr001 and chr0025: the median dying agent held 0.63x the
+  # room's mean context. Big agents were SAFER than small ones, because size
+  # correlates with having drained your backlog and gone quiet.
+  #
+  # That is also why bloat is an externality. Holding 300,000 tokens raises
+  # every agent's hazard by filling the room, but the holder bears only 1/N of
+  # the harm — which is how chr0025 and uni0025 ended with two agents sitting
+  # on 310,000 tokens each in a pool that was not even full, nobody dying and
+  # nobody able to be born.
+  #
+  # `random_holder` picks the victim with probability proportional to blocks
+  # held (it draws a random held block and kills its owner). Holdings stop
+  # being a free store and become continuous exposure — rent expressed as
+  # hazard, with no new currency, no dice outside the economy and no chosen
+  # timescale. It has been in the config since the start and no run has ever
+  # used it.
+  eviction: random_holder
+  # Parents carry their children's adapter blocks: 11 each of the child's 22,
+  # for as long as the parent lives. On a parent's death the charge reverts to
+  # the child, whose adapter is still registered; if the child dies first the
+  # blocks are simply freed.
+  #
+  # This is not a tax. No extra memory is allocated anywhere — the blocks
+  # charged are exactly the ones the engine registered for the child's
+  # adapter, and the child stops paying for them. Total room occupancy is
+  # identical to a run without it; only the owner differs. That was the whole
+  # point: a reproduction cost denominated in memory that is genuinely in use,
+  # rather than one that burns device memory to create an incentive.
+  #
+  # It only bites under random_holder, which is why the two are set together.
+  # Under `requester` a parent's extra holdings do not raise its own hazard,
+  # so the charge would be inert.
+  parental_investment: true
+  initial_population_per_room: 32
+  tools: [tell, mate, go]
+  chat_format: true
+  read_policy: drain
+  observation_absorption: utterance
+  mate_window_tokens: 64
+  viability_probe_turns: 3
+
+
+refill:
+  # OFF. Immigration was scaffolding for getting a population off the ground,
+  # and the evidence says it is no longer load-bearing: in lowmut (6071675)
+  # every one of the 39 refills fired inside the first 3,500 steps of a 93,586
+  # step run, gpu1 needed none at all, and thereafter the rooms sustained
+  # themselves at 27-52 agents with a worst-case floor of 11. Nothing was being
+  # rescued after bootstrap.
+  #
+  # Worse, those bootstrap refills were an artefact of the old trigger rather
+  # than a need. A young room is empty of BLOCKS while being full of AGENTS --
+  # contexts have not grown yet -- so max_free_fraction could not tell "dying"
+  # from "just started", and put 28 fresh gen-0 genomes into gpu3 while its
+  # population was peaking at 91. That is contamination of generation 0 at
+  # exactly the point every later generation is measured against.
+  #
+  # With this off, self-sufficiency is not a statistic to be reported, it is a
+  # precondition for the run existing at all: births are the ONLY source of new
+  # agents after seeding. A population that cannot reproduce shrinks, and if
+  # the world empties, World logs an extinction event and stops (§7) -- which
+  # is a clean, interpretable negative rather than a subsidised ambiguity.
+  enabled: false
+  min_population: 0
+  max_free_fraction: null
+  check_every_steps: 500
+  max_per_check: 4
+  takeoff_window_steps: 20000
+  takeoff_min_births: 5
+
+# ── WHAT WE EXPECT TO LEARN ───────────────────────────────────────────────
+# Whether less mutation is monotonically better below the threshold, or whether
+# there is a floor past which the population starves for variation.
+#
+# Mutation is the ONLY source of new variation here -- there is no other
+# innovation operator -- and selection erodes the additive variance it feeds on.
+# lowmut already showed that erosion: phenotypic variance in canonical rate fell
+# to 0.033 against 0.15 in the sigma = 0.01 arms as the mean swept to 94.7%. At
+# 0.001, five matings move factor RMS only ~1.006x, so drift is essentially
+# frozen and the population is working almost entirely from standing gen-0
+# diversity.
+#
+# Expected if the threshold story is complete: this behaves like chr0025, maybe
+# slightly better, since less drift is strictly less damage.
+#
+# Expected if variation matters: it climbs more slowly than chr0025, or plateaus
+# at a lower canonical rate, or shows a heritability that collapses earlier as
+# the trait fixes. Any of those brackets the useful range from BELOW and means
+# there is an optimum sigma rather than a threshold to stay under.
+
+genome:
+  rank: 16
+  alpha: 32
+  target_modules: [q_proj, k_proj, v_proj, o_proj]
+  init_scale: 0.02
+  mutation_std: 0.001
+  crossover: chromosomal
+  chromosomes: 3
+  mutation: additive
+engine:
+  # lowmut and chromo were both aborted by the preemption guard after a single
+  # transient allocation failure (the counter is cumulative, and any preemption
+  # is an integrity violation by design). The economy still claims 48,000
+  # blocks per room -- unchanged, so these stay comparable to 6071675 -- but
+  # the pool underneath is grown from 75,962 blocks to give the scheduler more
+  # absolute slack for prefill bursts in the dense, fast-turnover regime that
+  # low mutation produces. safety_margin_blocks documents intent; it does not
+  # bind while capacity_blocks is explicit.
+  gpu_memory_utilization: 0.92
+  max_loras: 8
+  # Rooms now hold far more agents, so the CPU-side adapter cache has to hold
+  # them: 256 x 20.2 MB is ~5 GB of host RAM.
+  max_cpu_loras: 256
+  max_num_seqs: 128
+  enable_prefix_caching: true
+  enable_chunked_prefill: true
+  safety_margin_blocks: 4096
+  adapter_dir: /dev/shm/evollm
+
+sampling:
+  temperature: 1.0
+  top_p: 1.0
+
+run:
+  max_world_steps: 400000
+  # Genotype capture. The important part is the INHERITANCE MASK.
+  #
+  #   genome_fingerprints  writes one line per agent at creation to
+  #     <run>/genomes/<room>.jsonl. For a child it records `donors`: one bit
+  #     per site saying which parent supplied it — 112 bits, the actual act of
+  #     inheritance. Without it, descent can only be estimated by the expected
+  #     one-half rule, which is an average over births that never happened.
+  #     With it, descent is resolvable site by site back to the founder that
+  #     really contributed each one, which turns every site into a categorical
+  #     ALLELE that can be tested against behaviour directly. That is a marker
+  #     test with far more power than correlating a site's perturbation
+  #     magnitude with a trait — which is all snapshots alone could support,
+  #     and which produced no replicable hit in lowmut.
+  #
+  #     The same line also carries per-site magnitude summaries (delta_norm,
+  #     rms_a, rms_b). Cost is ~5.5 KB and ~17 ms per agent: ~70 MB and about
+  #     3 minutes over a 12,000-birth run.
+  #
+  #   snapshot_every_steps  full 40 MB genomes for the living, for work that
+  #     needs the actual factors rather than per-site summaries. Raised from
+  #     40,000 to 25,000 (~16 per room, ~32 GB). Full coverage is the
+  #     per-agent records' job now, not the snapshots'.
+  genome_fingerprints: true
+  snapshot_every_steps: 25000
+  occupancy_every_steps: 1000
+  trace_turns: 20000
+  context_snapshot_every_steps: 25000
+  context_snapshot_agents: 3

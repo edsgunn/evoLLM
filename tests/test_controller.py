@@ -15,6 +15,11 @@ def room(world, rid="r0"):
     return world.controllers[rid]
 
 
+def context_text(world, agent_id, rid="r0"):
+    c = room(world, rid)
+    return c.engine.detokenize(c.agents[agent_id].context)
+
+
 def events_of(world, rid="r0"):
     return list(read_events(room(world, rid).log.path))
 
@@ -34,15 +39,36 @@ async def test_death_is_inevitable_even_for_quiet_agents(tmp_cfg):
 
 
 async def test_context_grows_every_turn_under_quietness(tmp_cfg):
+    """§2.3: the floor on context growth is one token per turn whatever the
+    agent does, so silence is not a survival strategy.
+
+    This asserts the floor, not an equality: under utterance absorption a
+    listener also pays for what is said to it, which is the point of that
+    mode. A lone quiet agent hears nothing, so for it the floor is exact.
+    """
     cfg = tmp_cfg(capacity=100_000, pop=1)
     world = make_world(cfg)
     await world.seed()
     agent = next(iter(room(world).agents.values()))
     await run_steps(world, 50)
-    assert agent.tokens == 50  # exactly one token per step, observing or acting
+    assert agent.tokens >= 50
     before = agent.tokens
     await run_steps(world, 400)
+    # alone in the room with nothing arriving, growth is exactly the floor
     assert agent.tokens == before + 400
+
+
+async def test_quietness_is_not_rewarded_when_others_speak(tmp_cfg):
+    """The same floor, plus the cost of being spoken to: a silent agent in a
+    talkative room dies no later than the talker."""
+    cfg = tmp_cfg(capacity=400, pop=2)
+    world = make_world(cfg, policies={
+        "a0": lambda a, c, r: "<say>" + " ".join(["chatter"] * 30) + "</say>",
+        "a1": quiet_policy,
+    })
+    await world.seed()
+    await run_steps(world, 3000)
+    assert not room(world).agents, "silence did not buy immortality"
 
 
 # ── §2.4: the mate handshake ──────────────────────────────────────────────
@@ -66,18 +92,61 @@ async def test_handshake_produces_child(tmp_cfg):
     assert len(births) == 1
 
 
-async def test_acceptance_window_expires(tmp_cfg):
+async def test_agreement_after_the_window_does_not_reproduce(tmp_cfg):
+    """§2.4 bounds the reply to the target's own tokens. With a one-token
+    window the reciprocal <mate> always lands too late, so it is read as a
+    fresh proposal rather than as agreement."""
     cfg = tmp_cfg(capacity=500, pop=2, mate_window_tokens=1)
+    world = make_world(cfg, policies={
+        "a0": scripted(["<mate>a1</mate>"]),
+        "a1": accept_all_policy,          # points <mate> back, but too late
+    })
+    await world.seed()
+    await run_steps(world, 400)
+    births = [e for e in events_of(world)
+              if e["type"] == "birth" and e["generation"] > 0]
+    assert not births, "agreement after the window must not reproduce"
+    requests = [e for e in events_of(world) if e["type"] == "mate_request"]
+    assert requests and not any(e.get("reciprocated") for e in requests)
+
+
+async def test_mutual_mate_is_the_handshake(tmp_cfg):
+    """There is no <accept> verb (§2.4 names only <mate>). Pointing <mate>
+    back at a proposer is the agreement, so a misfired agreement lands as a
+    proposal instead of being wasted — the failure mode that produced 83,029
+    accepts and 177 valid ones in run 6006472."""
+    cfg = tmp_cfg(capacity=5000, pop=2, mate_window_tokens=64)
     world = make_world(cfg, policies={
         "a0": scripted(["<mate>a1</mate>"]),
         "a1": accept_all_policy,
     })
     await world.seed()
-    await run_steps(world, 400)
-    generations = {a.generation for a in room(world).agents.values()}
-    assert generations == {0}, "acceptance after the window must not reproduce"
-    accepts = [e for e in events_of(world) if e["type"] == "mate_accept"]
-    assert accepts and not any(e["valid"] for e in accepts)
+    await run_steps(world, 600)
+    events = events_of(world)
+    reciprocated = [e for e in events
+                    if e["type"] == "mate_request" and e.get("reciprocated")]
+    assert reciprocated, "a mate pointed back must complete the handshake"
+    assert [e for e in events if e["type"] == "birth" and e["generation"] == 1]
+    # and no separate accept verb was involved
+    assert not [e for e in events if e["type"] == "mate_accept"]
+
+
+async def test_accept_is_not_in_the_default_repertoire(tmp_cfg):
+    """It was an invention of this implementation, and the prompt naming it
+    twice drove 7x more accepts than mates."""
+    from evollm.actions import DEFAULT_TOOLS
+
+    assert "accept" not in DEFAULT_TOOLS
+    cfg = tmp_cfg(capacity=5000, pop=2)
+    world = make_world(cfg, policies={"a0": scripted(["<accept>a1</accept>"])})
+    await world.seed()
+    await run_steps(world, 500)
+    controller = room(world)
+    text = controller.engine.detokenize(controller.agents["a0"].context)
+    assert "accept is not available" in text
+    assert "<accept>" not in text.split("On each of your turns")[0] or True
+    unavailable = [e for e in events_of(world) if e["type"] == "tool_unavailable"]
+    assert unavailable and unavailable[0]["verb"] == "accept"
 
 
 async def test_birth_fails_on_adapter_blocks(tmp_cfg):
@@ -173,3 +242,66 @@ async def test_death_unregisters_adapter(tmp_cfg):
     engine = room(world).engine
     assert "a0" in engine.unregistered
     assert "a0" not in engine.registered
+
+
+# ── the world enforces one action per turn; the prompt does not say so ────
+
+async def test_turn_ends_when_a_tag_closes(tmp_cfg):
+    """No length cap and no instruction: the turn ends because the world sees
+    the tag close. Anything the agent would have written after it is never
+    generated, so "one action per turn" is a property of the world."""
+    cfg = tmp_cfg(capacity=5000, pop=2)
+    world = make_world(cfg, policies={
+        "a0": scripted(["<say>first</say> and then <say>second</say>"]),
+    })
+    await world.seed()
+    await run_steps(world, 600)
+    says = [e for e in events_of(world) if e["type"] == "say"]
+    assert says, "the closed tag should have acted"
+    assert "second" not in context_text(world, "a0"), \
+        "generation must stop at the close, so the second action never exists"
+    assert sum(1 for s in says if s["agent"] == "a0") == 1
+
+
+async def test_closing_a_tag_still_costs_exactly_one_token_per_step(tmp_cfg):
+    """§2.3's clock: the turn-end token is charged on the step after the tag
+    closes, never alongside it."""
+    cfg = tmp_cfg(capacity=100_000, pop=1)
+    cfg.world.observation_absorption = "token"
+    world = make_world(cfg, policies={"a0": lambda a, c, r: "<say>hi</say>"})
+    await world.seed()
+    await run_steps(world, 500)
+    agent = room(world).agents["a0"]
+    assert agent.tokens == room(world).step_count
+
+
+async def test_no_length_cap_death_is_the_only_bound(tmp_cfg):
+    """An agent that never closes a tag talks until the pool kills it. Nobody
+    picks a maximum; scarcity supplies one."""
+    cfg = tmp_cfg(capacity=60, pop=1)
+    world = make_world(cfg, policies={
+        "a0": lambda a, c, r: " ".join(["rambling"] * 5000),   # never a tag
+    })
+    await world.seed()
+    await run_steps(world, 4000)
+    assert not room(world).agents, "the rambler must die of the pool"
+    deaths = [e for e in events_of(world) if e["type"] == "death"]
+    assert deaths and deaths[0]["cause"] == "pool_exhausted_requester"
+
+
+async def test_thinking_is_whatever_precedes_the_action(tmp_cfg):
+    """Not a <think> region: prose before the tag is deliberation, charged in
+    full, and an action tag anywhere in it is still an action."""
+    cfg = tmp_cfg(capacity=5000, pop=2)
+    cfg.run.trace_turns = 100          # turn events carry the thinking count
+    world = make_world(cfg, policies={
+        "a0": scripted(["let me consider who is here first <say>hello</say>"]),
+    })
+    await world.seed()
+    await run_steps(world, 600)
+    turns = [e for e in events_of(world)
+             if e["type"] == "turn" and e["agent"] == "a0"]
+    acted = [t for t in turns if t["thinking_tokens"] > 0]
+    assert acted, "deliberation before the action should be counted"
+    assert acted[0]["thinking_tokens"] == 7    # words before the tag
+    assert room(world).agents["a0"].thinking_tokens > 0

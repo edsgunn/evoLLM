@@ -34,12 +34,33 @@ def aggregate(run_dir: str | Path) -> dict:
     lifetime_vs_verbosity = []                        # (lifetime, mean_action_tokens)
     occupancy = defaultdict(list)
     invalid_deaths = []
+    forms = Counter()
+    refills = 0
+    takeoffs = []
+    takeoffs_lost = 0
+    origin_counts = Counter()
+    timeline = []          # (step, "birth"|"refill") for the takeoff curve
+    max_step = 0
+    noop_reasons = Counter()
+    think_tokens: list[int] = []
+    turn_tokens: list[int] = []
 
     for e in events:
         t = e["type"]
+        max_step = max(max_step, e.get("step", 0))
         if t == "birth":
             births += 1
             births_by_gen[e["generation"]] += 1
+            origin = e.get("origin", "seed")
+            origin_counts[origin] += 1
+            if origin in ("birth", "refill"):
+                timeline.append((e["step"], origin))
+        elif t == "refill":
+            refills += 1
+        elif t == "takeoff":
+            takeoffs.append(e)
+        elif t == "takeoff_lost":
+            takeoffs_lost += 1
         elif t == "birth_failed":
             birth_failures += 1
         elif t == "death":
@@ -61,6 +82,12 @@ def aggregate(run_dir: str | Path) -> dict:
             v[1] += 1
         elif t == "occupancy":
             occupancy[e["room"]].append(e)
+        elif t == "turn":
+            forms[e["form"]] += 1
+            think_tokens.append(e.get("thinking_tokens", 0))
+            turn_tokens.append(e.get("turn_tokens", 0))
+        elif t == "noop":
+            noop_reasons[e["reason"]] += 1
 
     total_deaths = sum(deaths_by_cause.values())
     return {
@@ -91,11 +118,73 @@ def aggregate(run_dir: str | Path) -> dict:
                 "rate": round(v[0] / v[1], 3) if v[1] else None}
             for g, v in sorted(viability_by_gen.items())
         },
+        "refills": refills,
+        "origins": dict(origin_counts),
+        "takeoff": _takeoff(timeline, max_step),
+        "takeoff_events": [
+            {"room": e["room"], "step": e["step"],
+             "population": e["population"], "generations": e["generations"],
+             "refills_before": e["refills_before"]} for e in takeoffs],
+        "takeoffs_lost": takeoffs_lost,
+        "action_forms": dict(forms.most_common()),
+        "noop_reasons": dict(noop_reasons),
+        "thinking": {
+            "mean_tokens_before_acting": round(sum(think_tokens) / len(think_tokens), 1)
+            if think_tokens else None,
+            "mean_turn_tokens": round(sum(turn_tokens) / len(turn_tokens), 1)
+            if turn_tokens else None,
+            "share_of_generation": round(sum(think_tokens) / sum(turn_tokens), 3)
+            if sum(turn_tokens) else None,
+        },
         "terseness_check": _correlation(lifetime_vs_verbosity),
         "occupancy_last": {
             room: snaps[-1] for room, snaps in occupancy.items() if snaps
         },
     }
+
+
+def _takeoff(timeline: list[tuple[int, str]], max_step: int,
+             quartiles: int = 4) -> dict:
+    """Is the population sustaining itself yet?
+
+    Refill keeps the arena populated so selection has something to act on, and
+    the price is that survival alone no longer proves anything. What does is
+    the share of new agents that arrived by descent rather than immigration:
+    `births / (births + refills)`, tracked over the run. Rising toward 1 is
+    takeoff. Flat is a population being carried by immigration.
+    """
+    if not timeline or max_step <= 0:
+        return {"self_sufficiency": None, "by_quartile": []}
+    width = max(max_step // quartiles, 1)
+    buckets = [[0, 0] for _ in range(quartiles)]   # births, refills
+    for step, origin in timeline:
+        i = min(step // width, quartiles - 1)
+        buckets[i][0 if origin == "birth" else 1] += 1
+    by_quartile = []
+    for i, (b, r) in enumerate(buckets):
+        total = b + r
+        by_quartile.append({
+            "steps": [i * width, (i + 1) * width],
+            "births": b, "refills": r,
+            "self_sufficiency": round(b / total, 3) if total else None,
+        })
+    tb = sum(b for b, _ in buckets)
+    tr = sum(r for _, r in buckets)
+    return {
+        "self_sufficiency": round(tb / (tb + tr), 3) if (tb + tr) else None,
+        "by_quartile": by_quartile,
+    }
+
+
+def _compact(by_gen: dict, keep: int = 6) -> str:
+    """Runs now reach hundreds of generations; printing every one buries the
+    report. Show the ends, which is where the trend lives."""
+    items = list(by_gen.items())
+    if len(items) <= keep * 2:
+        return str(dict(items))
+    head = ", ".join(f"{g}: {v}" for g, v in items[:keep])
+    tail = ", ".join(f"{g}: {v}" for g, v in items[-keep:])
+    return f"{{{head}, ... ({len(items) - keep * 2} more) ..., {tail}}}"
 
 
 def _correlation(pairs: list[tuple[float, float]]) -> dict:
@@ -125,7 +214,8 @@ def format_report(stats: dict) -> str:
         lines.append(f"  !! INVALID DEATHS (integrity): {len(stats['invalid_deaths'])}")
     else:
         lines.append("  death-cause audit: clean (all deaths are scarcity events)")
-    lines.append(f"mean lifetime by generation: {stats['mean_lifetime_by_generation']}")
+    lines.append("mean lifetime by generation: " +
+                 _compact(stats["mean_lifetime_by_generation"]))
     h = stats["handshake"]
     lines.append(
         f"handshake: {h['requests']} requests, {h['delivered']} delivered, "
@@ -134,6 +224,45 @@ def format_report(stats: dict) -> str:
     lines.append("viability by generation:")
     for g, v in stats["viability_by_generation"].items():
         lines.append(f"  gen {g}: {v['viable']}/{v['probed']} viable ({v['rate']})")
+    if stats["action_forms"]:
+        total = sum(stats["action_forms"].values())
+        canonical = stats["action_forms"].get("canonical", 0)
+        recovered = sum(v for k, v in stats["action_forms"].items()
+                        if k not in ("canonical", "none"))
+        lines.append(f"action forms (traced {total} turns): "
+                     f"canonical {canonical} ({canonical / total:.0%}), "
+                     f"recovered by tolerant parsing {recovered} "
+                     f"({recovered / total:.0%}), unparseable "
+                     f"{stats['action_forms'].get('none', 0)}")
+        lines.append(f"  breakdown: {stats['action_forms']}")
+    if stats["noop_reasons"]:
+        lines.append(f"noop reasons: {stats['noop_reasons']}")
+    th = stats["thinking"]
+    if th["mean_turn_tokens"]:
+        lines.append(
+            f"thinking: {th['mean_tokens_before_acting']} tokens generated before "
+            f"acting, of {th['mean_turn_tokens']} per turn "
+            f"({th['share_of_generation']:.0%} of generation)")
+    if stats["refills"]:
+        tk = stats["takeoff"]
+        lines.append(
+            f"refills: {stats['refills']}  origins: {stats['origins']}")
+        lines.append(
+            f"self-sufficiency (births / births+refills): {tk['self_sufficiency']}"
+            "   [1.0 = fully self-sustaining, takeoff = rising across quartiles]")
+        for q in tk["by_quartile"]:
+            lines.append(
+                f"  steps {q['steps'][0]:>7}-{q['steps'][1]:<7} "
+                f"births {q['births']:4d}  refills {q['refills']:4d}  "
+                f"-> {q['self_sufficiency']}")
+    for e in stats["takeoff_events"]:
+        lines.append(
+            f"TAKEOFF room {e['room']} @ step {e['step']}: population "
+            f"{e['population']}, generations {e['generations']}, after "
+            f"{e['refills_before']} refills — population checkpointed")
+    if stats["takeoffs_lost"]:
+        lines.append(f"  takeoff lapsed {stats['takeoffs_lost']}x "
+                     "(needed immigrants again; not durable)")
     t = stats["terseness_check"]
     lines.append(f"terseness check (lifetime vs mean action tokens): "
                  f"r={t['r']} over n={t['n']} deaths")
@@ -141,5 +270,8 @@ def format_report(stats: dict) -> str:
         lines.append(
             f"room {room} @ step {occ['step']}: {occ['agents']} agents, "
             f"{occ['free_blocks']}/{occ['capacity_blocks']} blocks free, "
-            f"mean context {occ['mean_context']}, generations {occ['generations']}")
+            f"mean context {occ['mean_context']}, "
+            f"obs backlog mean {occ.get('mean_backlog', 0)} max "
+            f"{occ.get('max_backlog', 0)} tokens, "
+            f"generations {occ['generations']}")
     return "\n".join(lines)

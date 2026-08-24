@@ -1,0 +1,91 @@
+# STATUS: SUPERSEDED — do not submit without checking why.
+# Ran as job 6071676. Closed — multiplicative mutation degraded like the
+# additive baseline, showing the operative quantity is perturbation size
+# relative to inherited signal, not growth in norm. See
+# runs/node_4room_7b_multmut_6071676/NOTES.md.
+#
+# Arm 3. Uniform crossover, additive noise replaced by multiplicative:
+# x <- x * (1 + N(0, std)). Additive noise is a random walk whose absolute
+# step is blind to how large the factor already is, so magnitude compounds
+# without bound; multiplicative noise perturbs each factor in proportion to
+# itself, holding the RELATIVE perturbation per mating constant.
+#
+# std is 0.5, not the baseline's 0.01, and deliberately so: additive 0.01 on
+# factors whose RMS is 0.02 IS a 0.5 relative perturbation. Carrying 0.01
+# across verbatim would have made this a 50x weaker mutation and turned the
+# arm into a second copy of lowmut. At 0.5 the first mating perturbs a child
+# exactly as hard as the baseline does, and only the compounding differs —
+# which is the single thing this arm exists to test.
+run_name: node-4room-7b-multmut
+seed: 0
+backend: vllm
+
+model:
+  name: Qwen/Qwen2.5-7B-Instruct
+  dtype: bfloat16
+  max_model_len: auto
+  extend_context: true
+
+world:
+  rooms:
+    - {id: gpu0, gpu: 0, capacity_blocks: 48000}
+    - {id: gpu1, gpu: 1, capacity_blocks: 48000}
+    - {id: gpu2, gpu: 2, capacity_blocks: 48000}
+    - {id: gpu3, gpu: 3, capacity_blocks: 48000}
+  edges: complete
+  block_size: 16
+  eviction: requester
+  initial_population_per_room: 32
+  tools: [tell, mate, go]
+  chat_format: true
+  read_policy: drain
+  observation_absorption: utterance
+  mate_window_tokens: 64
+  viability_probe_turns: 3
+
+# Refill triggers on FREE BLOCKS, not head-count. Under the old head-count
+# floor the rooms sat pinned at 8 agents while the pool was 92-94% full, so
+# every immigrant was inserted into an almost-full room and brought everyone
+# else's death forward; the two 4,000-block rooms needed 1,826 and 3,441
+# refills on that treadmill while an 8,000-block room needed 30.
+refill:
+  enabled: true
+  min_population: 0
+  max_free_fraction: 0.40
+  check_every_steps: 500
+  max_per_check: 4
+  takeoff_window_steps: 20000
+  takeoff_min_births: 5
+
+genome:
+  rank: 16
+  alpha: 32
+  target_modules: [q_proj, k_proj, v_proj, o_proj]
+  init_scale: 0.02
+  mutation_std: 0.5
+  crossover: uniform
+  chromosomes: 3
+  mutation: multiplicative
+engine:
+  gpu_memory_utilization: 0.85
+  max_loras: 8
+  # Rooms now hold far more agents, so the CPU-side adapter cache has to hold
+  # them: 256 x 20.2 MB is ~5 GB of host RAM.
+  max_cpu_loras: 256
+  max_num_seqs: 128
+  enable_prefix_caching: true
+  enable_chunked_prefill: true
+  safety_margin_blocks: 128
+  adapter_dir: /dev/shm/evollm
+
+sampling:
+  temperature: 1.0
+  top_p: 1.0
+
+run:
+  max_world_steps: 400000
+  snapshot_every_steps: 40000
+  occupancy_every_steps: 1000
+  trace_turns: 20000
+  context_snapshot_every_steps: 25000
+  context_snapshot_agents: 3

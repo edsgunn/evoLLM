@@ -63,7 +63,9 @@ class MockTurnHandle(TurnHandle):
 class MockEngine(EngineBackend):
     def __init__(self, default_policy: Policy | None = None,
                  policies: dict[str, Policy] | None = None, seed: int = 0,
-                 tokenizer: WordTokenizer | None = None):
+                 tokenizer: WordTokenizer | None = None,
+                 capacity_blocks: int | None = None,
+                 chat_format: bool = True):
         # Multi-room worlds must share one tokenizer: agents migrate with
         # their token ids (the real backend shares the HF tokenizer too).
         self.tokenizer = tokenizer or WordTokenizer()
@@ -73,6 +75,19 @@ class MockEngine(EngineBackend):
         self.rng = np.random.default_rng(seed)
         self.registered: dict[str, Genome] = {}
         self.unregistered: list[str] = []
+        self._capacity_blocks = capacity_blocks
+        self.chat_format = chat_format
+
+    def capacity_blocks(self) -> int | None:
+        return self._capacity_blocks
+
+    def block_prefix(self, role: str, first: bool = False) -> list[int]:
+        """Mirrors the vLLM backend's framing exactly, newlines included, so a
+        test with a whitespace-preserving tokenizer sees the real shape."""
+        if not self.chat_format:
+            return []
+        lead = "" if first else "\n"
+        return self.tokenize(f"{lead}<|im_start|>{role}\n")
 
     def tokenize(self, text: str) -> list[int]:
         return self.tokenizer.tokenize(text)
@@ -106,11 +121,14 @@ def chatty_policy(agent_id: str, context: str, rng) -> str:
 
 
 def accept_all_policy(agent_id: str, context: str, rng) -> str:
-    """Accept the most recent pending mate request, else stay quiet."""
+    """Agree to the most recent proposal by pointing <mate> back at it.
+
+    There is no <accept> verb: §2.4 names only <mate>, and reciprocating it is
+    the acceptance."""
     requests = re.findall(r"<mate>(\S+)</mate>", context)
     others = [r for r in requests if r != agent_id]
     if others:
-        return f"<accept>{others[-1]}</accept>"
+        return f"<mate>{others[-1]}</mate>"
     return ""
 
 
@@ -137,13 +155,44 @@ def scripted(turns: list[str]) -> Policy:
     return policy
 
 
+def _roster(agent_id: str, context: str) -> list[str]:
+    rosters = re.findall(r"(?i)present: ([\w, ]+)", context)
+    known = []
+    if rosters:
+        known = [a.strip() for a in rosters[-1].split(",")
+                 if a.strip() and a.strip() != "nobody else"]
+    if not known:
+        known = list(set(re.findall(r"(?m)^(\w+): <", context)))
+    return [a for a in known if a != agent_id]
+
+
+def _wander(context: str, rng) -> str:
+    rooms = re.findall(r"adjacent[^:]*: ([\w, ]+)", context)
+    if rooms:
+        options = [r.strip() for r in rooms[0].split(",")
+                   if r.strip() and r.strip() != "none"]
+        if options:
+            return f"<go>{rng.choice(options)}</go>"
+    return ""
+
+
 def heuristic_policy(agent_id: str, context: str, rng: np.random.Generator) -> str:
     """A behavioural null for dry runs: accepts pending requests, otherwise
     talks, courts an agent it has heard of, or wanders."""
     requests = [r for r in re.findall(r"<mate>(\S+)</mate>", context) if r != agent_id]
     if requests and rng.random() < 0.8:
-        return f"<accept>{requests[-1]}</accept>"
-    known = [a for a in set(re.findall(r"<from (\w+)>", context)) if a != agent_id]
+        return f"<mate>{requests[-1]}</mate>"
+    # Prefer the roster (most recent "present: ..." listing) over ids merely
+    # overheard, mirroring what a competent agent should do with the §2.4
+    # perception the world now provides.
+    rosters = re.findall(r"(?i)present: ([\w, ]+)", context)
+    known = []
+    if rosters:
+        known = [a.strip() for a in rosters[-1].split(",")
+                 if a.strip() and a.strip() != "nobody else"]
+    if not known:
+        known = list(set(re.findall(r"(?m)^(\w+): <", context)))
+    known = [a for a in known if a != agent_id]
     roll = rng.random()
     if known and roll < 0.3:
         return f"<mate>{rng.choice(known)}</mate>"
@@ -157,9 +206,24 @@ def heuristic_policy(agent_id: str, context: str, rng: np.random.Generator) -> s
     return ""
 
 
+def tell_policy(agent_id: str, context: str, rng: np.random.Generator) -> str:
+    """heuristic_policy's twin for worlds where speech is directed."""
+    requests = [r for r in re.findall(r"<mate>(\S+)</mate>", context) if r != agent_id]
+    if requests and rng.random() < 0.8:
+        return f"<mate>{requests[-1]}</mate>"
+    known = _roster(agent_id, context)
+    roll = rng.random()
+    if known and roll < 0.3:
+        return f"<mate>{rng.choice(known)}</mate>"
+    if known and roll < 0.8:
+        return f"<tell>{rng.choice(known)}|i am {agent_id} and i am here</tell>"
+    return _wander(context, rng)
+
+
 POLICIES: dict[str, Policy] = {
     "quiet": quiet_policy,
     "chatty": chatty_policy,
     "accept_all": accept_all_policy,
     "heuristic": heuristic_policy,
+    "tell": tell_policy,
 }

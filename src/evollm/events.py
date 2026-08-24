@@ -29,7 +29,16 @@ class EventLog:
     def __init__(self, path: str | Path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._f = open(self.path, "a", buffering=1)
+        # Appending silently concatenated three separate prechecks into one
+        # file, and every summary computed from it aggregated all of them —
+        # reporting 2 births where the run being measured had 0. Measurements
+        # from mixed runs are worse than no measurement, so refuse.
+        if self.path.exists() and self.path.stat().st_size > 0:
+            raise ExperimentIntegrityError(
+                f"{self.path} already holds events from an earlier run. "
+                "Appending would merge two experiments into one indivisible "
+                "log. Pass a fresh --name, or delete the directory.")
+        self._f = open(self.path, "x", buffering=1)
 
     def emit(self, step: int, type: str, **fields: Any) -> None:
         record = {"step": step, "t": round(time.time(), 3), "type": type, **fields}

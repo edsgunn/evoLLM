@@ -1,0 +1,168 @@
+# STATUS: queued as Slurm job 6081397 (submitted 2026-08-21).
+# The control for chr0025 (6081311). Identical to it except crossover; diff the two files to confirm.
+#
+# THE CROSSOVER CONTROL. Uniform crossover at sigma = 0.0025, identical to
+# chr0025 in every other respect, so that the pair differs in exactly one
+# variable and Q3 becomes answerable.
+#
+# lowmut (6071675) was already uniform at this sigma, but it cannot serve as
+# the control: it differs from chr0025 in three further ways. It ran with
+# refill on at 0.40 free, and all 39 of its refills fired inside the first
+# 3,500 steps -- injecting fresh gen-0 genomes into generation 0 itself, which
+# is the baseline its entire "reproduction climbed 1.33 -> 8.54" result is
+# measured against. It ran before observations were merged into a single chat
+# block, and chat formatting has already proved to be the largest single
+# behavioural lever in this project. And it was aborted at step 93,586 of
+# 400,000 with its reproduction rate still rising.
+#
+# The last of those can be handled analytically by comparing at matched step
+# or matched generation. The first two cannot, which is why this run exists.
+#
+# Read it against chr0025 (6081311) and nothing else. The prior for
+# chromosomal is theoretical -- ~3.8 parent switches per child against ~55, so
+# a co-adapted block can actually be inherited whole -- and the empirical case
+# so far is one marginal result, h2 +0.61 +/- 0.16 against +0.24 +/- 0.05 for
+# the pooled uniform arms at sigma = 0.01, z = 2.15, on samples where a
+# uniform arm (norefill) scored higher still. This pair is what turns that
+# into evidence or retires it.
+run_name: node-4room-7b-uni0025
+seed: 0
+backend: vllm
+
+model:
+  name: Qwen/Qwen2.5-7B-Instruct
+  dtype: bfloat16
+  max_model_len: auto
+  extend_context: true
+
+world:
+  rooms:
+    - {id: gpu0, gpu: 0, capacity_blocks: 48000}
+    - {id: gpu1, gpu: 1, capacity_blocks: 48000}
+    - {id: gpu2, gpu: 2, capacity_blocks: 48000}
+    - {id: gpu3, gpu: 3, capacity_blocks: 48000}
+  edges: complete
+  block_size: 16
+  eviction: requester
+  initial_population_per_room: 32
+  tools: [tell, mate, go]
+  chat_format: true
+  read_policy: drain
+  observation_absorption: utterance
+  mate_window_tokens: 64
+  viability_probe_turns: 3
+
+
+refill:
+  # OFF. Immigration was scaffolding for getting a population off the ground,
+  # and the evidence says it is no longer load-bearing: in lowmut (6071675)
+  # every one of the 39 refills fired inside the first 3,500 steps of a 93,586
+  # step run, gpu1 needed none at all, and thereafter the rooms sustained
+  # themselves at 27-52 agents with a worst-case floor of 11. Nothing was being
+  # rescued after bootstrap.
+  #
+  # Worse, those bootstrap refills were an artefact of the old trigger rather
+  # than a need. A young room is empty of BLOCKS while being full of AGENTS --
+  # contexts have not grown yet -- so max_free_fraction could not tell "dying"
+  # from "just started", and put 28 fresh gen-0 genomes into gpu3 while its
+  # population was peaking at 91. That is contamination of generation 0 at
+  # exactly the point every later generation is measured against.
+  #
+  # With this off, self-sufficiency is not a statistic to be reported, it is a
+  # precondition for the run existing at all: births are the ONLY source of new
+  # agents after seeding. A population that cannot reproduce shrinks, and if
+  # the world empties, World logs an extinction event and stops (§7) -- which
+  # is a clean, interpretable negative rather than a subsidised ambiguity.
+  enabled: false
+  min_population: 0
+  max_free_fraction: null
+  check_every_steps: 500
+  max_per_check: 4
+  takeoff_window_steps: 20000
+  takeoff_min_births: 5
+
+# ── WHAT WE EXPECT TO LEARN ───────────────────────────────────────────────
+# Whether chromosomal crossover actually beats uniform, which is currently
+# assumed on theory and one marginal measurement rather than established.
+#
+# Expected if chromosomal genuinely transmits better: chr0025 shows a higher
+# heritability with a midparent/single-parent slope ratio nearer 2.0, and its
+# reproduction curve rises faster or plateaus higher than this arm's. Sample
+# size should finally be adequate -- lowmut gave 8,870 parent-offspring pairs at
+# this sigma while truncated, so both arms should land in the thousands and cut
+# the standard errors ~3x against the sigma=0.01 arms that gave 86-1,313.
+#
+# Expected if it does not: the two are indistinguishable, and the default change
+# to chromosomal stands on its theoretical prior alone (~3.8 parent switches per
+# child against ~55, so a co-adapted block can be inherited whole). That is a
+# defensible position but it must be stated as such rather than as evidence.
+#
+# Watch the RATIO more than the slope. Additive transmission pins it at 2;
+# shared environment gives 1-2. It is the part that cannot be faked by
+# circumstance, and it is why the sigma=0.01 comparison was unconvincing:
+# chromo returned 2.78 but free60, uniform, returned 3.98 -- above the
+# theoretical maximum, so mostly noise at n=251.
+
+genome:
+  rank: 16
+  alpha: 32
+  target_modules: [q_proj, k_proj, v_proj, o_proj]
+  init_scale: 0.02
+  mutation_std: 0.0025
+  crossover: uniform
+  chromosomes: 3
+  mutation: additive
+engine:
+  # lowmut and chromo were both aborted by the preemption guard after a single
+  # transient allocation failure (the counter is cumulative, and any preemption
+  # is an integrity violation by design). The economy still claims 48,000
+  # blocks per room -- unchanged, so these stay comparable to 6071675 -- but
+  # the pool underneath is grown from 75,962 blocks to give the scheduler more
+  # absolute slack for prefill bursts in the dense, fast-turnover regime that
+  # low mutation produces. safety_margin_blocks documents intent; it does not
+  # bind while capacity_blocks is explicit.
+  gpu_memory_utilization: 0.92
+  max_loras: 8
+  # Rooms now hold far more agents, so the CPU-side adapter cache has to hold
+  # them: 256 x 20.2 MB is ~5 GB of host RAM.
+  max_cpu_loras: 256
+  max_num_seqs: 128
+  enable_prefix_caching: true
+  enable_chunked_prefill: true
+  safety_margin_blocks: 4096
+  adapter_dir: /dev/shm/evollm
+
+sampling:
+  temperature: 1.0
+  top_p: 1.0
+
+run:
+  max_world_steps: 400000
+  # Genotype capture. The important part is the INHERITANCE MASK.
+  #
+  #   genome_fingerprints  writes one line per agent at creation to
+  #     <run>/genomes/<room>.jsonl. For a child it records `donors`: one bit
+  #     per site saying which parent supplied it — 112 bits, the actual act of
+  #     inheritance. Without it, descent can only be estimated by the expected
+  #     one-half rule, which is an average over births that never happened.
+  #     With it, descent is resolvable site by site back to the founder that
+  #     really contributed each one, which turns every site into a categorical
+  #     ALLELE that can be tested against behaviour directly. That is a marker
+  #     test with far more power than correlating a site's perturbation
+  #     magnitude with a trait — which is all snapshots alone could support,
+  #     and which produced no replicable hit in lowmut.
+  #
+  #     The same line also carries per-site magnitude summaries (delta_norm,
+  #     rms_a, rms_b). Cost is ~5.5 KB and ~17 ms per agent: ~70 MB and about
+  #     3 minutes over a 12,000-birth run.
+  #
+  #   snapshot_every_steps  full 40 MB genomes for the living, for work that
+  #     needs the actual factors rather than per-site summaries. Raised from
+  #     40,000 to 25,000 (~16 per room, ~32 GB). Full coverage is the
+  #     per-agent records' job now, not the snapshots'.
+  genome_fingerprints: true
+  snapshot_every_steps: 25000
+  occupancy_every_steps: 1000
+  trace_turns: 20000
+  context_snapshot_every_steps: 25000
+  context_snapshot_agents: 3

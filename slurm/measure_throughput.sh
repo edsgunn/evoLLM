@@ -15,9 +15,7 @@
 set -euo pipefail
 REPO=/lus/lfs1aip2/projects/a5l/egunn/projects/evoLLM
 cd "$REPO"
-module purge
-module load cudatoolkit
-module load brics/nccl
+source "$REPO/slurm/_env.sh"
 source "$REPO/.venv/bin/activate"
 
 evollm measure-throughput -c configs/single_gpu.yaml \

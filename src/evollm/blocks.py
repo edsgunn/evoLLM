@@ -21,10 +21,20 @@ import numpy as np
 class Holding:
     adapter_blocks: int = 0
     kv_blocks: int = 0
+    # Blocks this agent owns on another agent's behalf: subject id -> blocks.
+    # A parent carries its children's adapters (§3.2), so reproduction has a
+    # cost denominated in memory that is genuinely in use rather than in a tax
+    # on nothing. Nothing extra is allocated — the child's adapter is the same
+    # 22 blocks the engine really registered; only the owner differs.
+    dependents: dict[str, int] = field(default_factory=dict)
+
+    @property
+    def dependent_blocks(self) -> int:
+        return sum(self.dependents.values())
 
     @property
     def total(self) -> int:
-        return self.adapter_blocks + self.kv_blocks
+        return self.adapter_blocks + self.kv_blocks + self.dependent_blocks
 
 
 @dataclass
@@ -57,6 +67,52 @@ class BlockPool:
             return False
         self.holdings.setdefault(agent_id, Holding()).adapter_blocks += blocks
         return True
+
+    def reserve_dependent(self, owner_id: str, subject_id: str,
+                          blocks: int) -> bool:
+        """Charge `blocks` of `subject_id`'s footprint to `owner_id`.
+
+        Used at birth: each parent takes on a share of the child's adapter, so
+        a prolific agent carries the memory its offspring occupy and dies
+        sooner for it. The blocks are not new — the caller must NOT also
+        reserve them against the subject — so total room usage is unchanged
+        and no device memory is wasted to create the incentive.
+        """
+        if self.free < blocks:
+            return False
+        h = self.holdings.setdefault(owner_id, Holding())
+        h.dependents[subject_id] = h.dependents.get(subject_id, 0) + blocks
+        return True
+
+    def release_dependent(self, subject_id: str) -> int:
+        """Free every dependent charge for `subject_id`, wherever it is held.
+
+        Called when the subject dies: the child's adapter is gone, so whoever
+        was carrying it stops paying.
+        """
+        freed = 0
+        for owner, h in list(self.holdings.items()):
+            n = h.dependents.pop(subject_id, 0)
+            freed += n
+            if h.total == 0:
+                self.holdings.pop(owner, None)
+        return freed
+
+    def revert_dependents(self, owner_id: str) -> dict[str, int]:
+        """Hand an owner's dependent charges back to the subjects themselves.
+
+        Called when the OWNER dies. The child is still alive and its adapter
+        is still registered, so the blocks must keep being accounted for —
+        they revert to the child, which is who they were always describing.
+        """
+        h = self.holdings.get(owner_id)
+        if h is None or not h.dependents:
+            return {}
+        moved = dict(h.dependents)
+        h.dependents.clear()
+        for subject, n in moved.items():
+            self.holdings.setdefault(subject, Holding()).adapter_blocks += n
+        return moved
 
     # ── KV growth ─────────────────────────────────────────────────────────
     def kv_needs_block(self, agent_id: str, new_token_count: int) -> bool:

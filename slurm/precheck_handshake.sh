@@ -16,9 +16,9 @@
 set -euo pipefail
 REPO=/lus/lfs1aip2/projects/a5l/egunn/projects/evoLLM
 cd "$REPO"
-module purge
-module load cudatoolkit
-module load brics/nccl
+source "$REPO/slurm/_env.sh"
 source "$REPO/.venv/bin/activate"
 
-evollm precheck-handshake -c configs/single_gpu.yaml --steps 20000
+CONFIG="${CONFIG:-configs/single_gpu.yaml}"
+echo "config: $CONFIG"
+evollm precheck-handshake -c "$CONFIG" --steps 20000 --trace 6000
