@@ -147,3 +147,13 @@ Moved here when they finish.
 | 6141411 | 40 villages of 10 agents, `say` | Is speech worth doing when affordable? Can a metapopulation form niches? |
 | 6143004 | base-model base rate | What the frozen model does with no adapter — the reference every "takeoff" claim needs. |
 | 6143016 | braced prompt placeholders | Is the degenerate placeholder action a prompt artefact or something deeper? |
+
+## 2026-08-26 (later)
+
+Surprise instrumented for the first time, and the traces read for the first time.
+
+- **Observation surprise** added: the log-probability of the tokens the *world* writes into an agent's context, bucketed by position in the agent's own life and carried on every death event. The agent's surprise at its own output is kept separately as the fluency control. `src/evollm/analysis/metrics/surprise.md`.
+- **Enabled on all four queued arms** (6141167 mlp, 6141384 chr0025_evict, 6141411 villages, 6143016 braced) rather than in a dedicated run, with a startup probe that disables the metric — not the run — if the unproven GPU path fails. `configs/node_4room_7b_surprise.yaml` held as the fallback arm.
+- **Tracing changed**: whole lives of a random tenth of agents instead of the first N turns a room produces. The old budget filled up in the opening of the run, so every traced life was a founder's prefix — which is why within-lifetime questions could not be asked of any previous run.
+- **`evollm inspect-traces`** reads the raw turns. On the existing runs it found, in every one: communication has collapsed (`tell` is 0.3-2% of actions; 1,000 tells against 173,988 mate requests in the reference run), a quarter to a third of agents emit one identical turn for 80%+ of their life while scoring as canonical throughout, and the placeholder tic reaches `mate` as well as `go`.
+- **Within-lifetime change measured** on every past run via the behavioural proxy: no improvement anywhere, and a significant decline in the reference run (−0.74 pp ± 0.41 canonical rate, paired, n=2,445).

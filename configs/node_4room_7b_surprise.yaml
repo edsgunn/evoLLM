@@ -1,4 +1,11 @@
-# STATUS: QUEUED
+# STATUS: NOT SUBMITTED -- held as a fallback
+# Surprise was instead enabled across the four already-queued arms (mlp,
+# chr0025_evict, villages, braced), which measures it under four treatments
+# without spending another slot. This dedicated arm exists for the case where
+# that goes wrong: if the startup probe disables surprise, or if the overhead
+# turns out to confound those runs, this is the clean single-variable
+# measurement to fall back to. Do not submit it while the queued arms are
+# still expected to report.
 # SURPRISE. The reference configuration (chr001_evict, job 6127798) with the
 # project's own hypothesis instrumented for the first time. Genome, economy,
 # eviction, refill and topology are byte-identical to the reference, so this

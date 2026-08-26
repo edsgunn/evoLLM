@@ -246,5 +246,17 @@ run:
   snapshot_every_steps: 25000
   occupancy_every_steps: 1000
   trace_turns: 20000
+  # Trace whole lives of a random tenth of agents rather than the first turns
+  # the room happens to produce. The plain budget filled up in the opening of
+  # the run, so every traced life was a founder's prefix and within-lifetime
+  # questions could not be asked of it. Same volume, whole lives, spread over
+  # the run.
+  trace_agent_fraction: 0.10
+  # Score the tokens the WORLD writes into each agent's context, bucketed by
+  # position in the agent's own life. Enabled across the queued arms so
+  # surprise is measured under four different treatments at once rather than
+  # in one dedicated arm. The GPU path is unproven, so the engine probes it at
+  # startup and disables surprise -- not the run -- if it does not work.
+  record_surprise: true
   context_snapshot_every_steps: 25000
   context_snapshot_agents: 3

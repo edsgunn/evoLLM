@@ -229,6 +229,21 @@ show.
 - **Most moves fail.** 98,471 failed against 81,532 succeeded in the reference
   run — 55% of attempts. — *established* — same
 
+### What the running arms will now also report
+
+All four queued arms (`mlp` 6141167, `chr0025_evict` 6141384, `villages`
+6141411, `braced` 6143016) now record **observation surprise** and trace whole
+lives of a sampled tenth of agents. This measures the project's hypothesis
+under four treatments at once instead of in a dedicated arm.
+
+The GPU path is unproven, so the engine **probes it at startup and disables
+surprise rather than the run** if it fails — check each job's log for
+`surprise recording active` or `surprise recording DISABLED`. If it disables
+everywhere, `configs/node_4room_7b_surprise.yaml` is the clean fallback arm.
+Watch step rate against 6127798 early: the overhead should be a logits matmul
+over a few dozen positions per turn, and if it is more than that these four
+arms are confounded with it.
+
 ### Holes in what we have already run
 
 - ~~**We have never measured the base model.**~~ Being measured now (6143004).

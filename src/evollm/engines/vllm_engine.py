@@ -303,6 +303,48 @@ class VLLMEngine(EngineBackend):
             print(f"[{self.room.id}] engine pool {self._num_gpu_blocks:,} blocks; "
                   f"economy claims {claimed:,}; headroom {head:,} "
                   f"({head / self._num_gpu_blocks * 100:.0f}%)")
+        if self.cfg.run.record_surprise:
+            await self._probe_surprise()
+
+    async def _probe_surprise(self) -> None:
+        """Prove the prompt-logprob path works before the run depends on it.
+
+        Surprise recording is measurement, not treatment: it must never be the
+        reason a 12-hour job dies. This issues one throwaway request at
+        startup and, if anything about it fails or comes back unusable, turns
+        surprise off for this engine and says so loudly. Losing the metric
+        costs an analysis; losing the run costs a slot in a queue measured in
+        days.
+        """
+        from vllm import SamplingParams
+        from vllm.sampling_params import RequestOutputKind
+        probe = [self.turn_end_id] + self.tokenize("probe surprise path")
+        try:
+            params = SamplingParams(temperature=0.0, max_tokens=1,
+                                    logprobs=0, prompt_logprobs=0,
+                                    output_kind=RequestOutputKind.FINAL_ONLY)
+            scores = None
+            async for out in self.engine.generate(
+                    {"prompt_token_ids": probe}, params,
+                    f"surprise-probe-{self.room.id}"):
+                rows = getattr(out, "prompt_logprobs", None)
+                if rows:
+                    scores = _flatten_prompt_logprobs(rows, probe)
+            usable = sum(1 for v in (scores or []) if v is not None)
+        except Exception as exc:                      # noqa: BLE001
+            self.cfg.run.record_surprise = False
+            print(f"[{self.room.id}] surprise recording DISABLED: the prompt-"
+                  f"logprob path raised {type(exc).__name__}: {exc}. The run "
+                  f"continues without it.", flush=True)
+            return
+        if usable < 2:
+            self.cfg.run.record_surprise = False
+            print(f"[{self.room.id}] surprise recording DISABLED: the probe "
+                  f"returned {usable} usable prompt logprobs. The run "
+                  f"continues without it.", flush=True)
+            return
+        print(f"[{self.room.id}] surprise recording active "
+              f"({usable}/{len(probe)} probe positions scored)", flush=True)
 
     def _hf_overrides(self) -> dict:
         """Let agents live past the base model's trained context window.
