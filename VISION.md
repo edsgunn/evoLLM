@@ -1,301 +1,151 @@
 # Vision
 
-*Why this project exists, what it is trying to produce, and how we would know
-if it worked. This document changes rarely. What we currently believe lives in
-`STATE.md`; how we work lives in `PROCESS.md`.*
+## Purpose
 
----
+This document states why the project exists, what it is trying to produce, and what would count as evidence that it worked or failed. It describes the programme, not its progress. Nothing here should need revision because a run finished.
 
-## The thesis
+## The Thesis
 
-**Population training is a third pre-training-like stage, and the world is the
-dataset.**
+**Population training is a third pre-training-like stage, and the world is the dataset.**
 
-Language models are built in two stages that do different jobs. Pre-training
-optimises a proxy — predict the next token — that nobody wants for its own
-sake, and produces a model useful for tasks nobody specified in advance.
-Post-training optimises tasks we name, and produces competence on those tasks,
-narrowly and expensively, one at a time.
+Language models are currently built in two stages that play distinct roles:
 
-The gap between them is agency. A model that has been pre-trained and then
-tuned to follow instructions is not an agent; it is a text predictor wearing an
-agent's costume, with the agency supplied from outside by a prompt and a
-harness. Everything that makes it act — persistence, awareness of its own
-resources, treating other participants as minds, caring whether it continues —
-is scaffolding around the weights rather than anything in them.
+- **Pre-training** optimises a proxy — next-token prediction — that no one wants for its own sake, and produces a model useful for tasks nobody specified in advance.
+- **Post-training** optimises named tasks, and produces narrow competence one expensive task at a time.
 
-We propose a third stage with pre-training's *shape* and agency's *content*:
-put populations of models in a world, let selection run without naming any
-task, and harvest a population whose agentic dispositions are in the weights.
-Fine-tuning for particular downstream tasks then starts from something that is
-already an agent, rather than manufacturing agency per task.
+The gap between them is agency. A model that has been pre-trained and tuned to follow instructions is not an agent; it is a text predictor wearing an agent's costume, with agency supplied externally by prompts and harnesses. Persistence, resource awareness, treating counterparties as minds, and self-preservation are treated as scaffolding around the weights rather than as properties of them.
 
-The claim that makes this more than an analogy is the second half. Pre-training
-transfers because the corpus covers the task distribution. Population training
-will transfer only insofar as **the world's structure covers the task's
-structure**. That makes world design the central research problem, and it is
-the same problem as corpus curation, one level up.
+The proposed third stage combines pre-training's structure with agency's content: place populations of models in a world, let selection run without naming any task, and harvest a population whose agentic dispositions are in the weights. Fine-tuning for downstream tasks then starts from a native agent instead of manufacturing agency per task.
 
----
+**The core claim.** Pre-training transfers because the corpus covers the task distribution. Population training will transfer only insofar as the world's structure covers the task's structure. World design is therefore the central research problem — corpus curation raised one level.
 
-## What "natively agentic" means
+## What "Natively Agentic" Means
 
-The phrase has to be operational or it is decoration. We mean:
+The phrase is only useful if it is operational.
 
-> **Behaviour conditioned on the agent's own state and on models of other
-> agents, in service of its own continuation, without prompt scaffolding.**
+> **Native agency:** behaviour conditioned on the agent's own state and on models of other agents, in service of continuation and reproduction, without prompt scaffolding.
 
-Three testable components, in increasing order of difficulty:
+Three components, in increasing order of difficulty:
 
-1. **Self-modelling.** Does what the agent does depend on its own condition —
-   how much resource it holds, how long it has lived, how close it is to death?
-   An agent that acts identically when rich and when nearly dead is not
-   tracking itself.
-2. **Other-modelling.** Does what the agent does depend on *which* other agent
-   it is dealing with, and on what that agent has done? Treating every
-   counterparty identically is reacting to a room, not to a mind.
-3. **Continuation-seeking.** Does the agent behave as though its own
-   persistence matters — trading immediate action for survival, or survival for
-   reproduction?
+1. **Self-modelling** — behaviour depends on internal condition: resource level, age, proximity to termination.
+2. **Other-modelling** — behaviour depends on the specific counterparty and its history, not on the room in aggregate.
+3. **Continuation-seeking** — behaviour treats persistence as mattering: trading immediate gain for survival, or survival for reproduction.
 
-None of these require the agent to be *good* at anything. They are the minimum
-conditions for calling the thing an agent rather than a policy, and they are
-what we expect to transfer, because they are task-independent.
+**These are hypotheses, not in-world diagnostics.** Observing state-dependent behaviour inside the world does not establish any of them: a reflex loop keyed to a resource counter satisfies (1) behaviourally while modelling nothing, and no amount of in-world inspection settles the difference. The three components are claims about what a population has acquired, and they are tested only by generalisation — by held-out tasks that require the disposition and were never present in the world. Anything weaker is an unfalsifiable philosophical assertion and is excluded from the programme.
 
-This definition is deliberately demanding of our instrumentation: none of it is
-answerable from lifetime aggregates, and at the time of writing none of it is
-measured. That is the definition doing its job.
+None of the three requires skill proficiency. They are minimum conditions for calling something an agent rather than a policy, they are task-independent, and they are the properties expected to transfer.
 
----
+## The World Is the Dataset
 
-## Why a world, and why this one
+Everything a population learns must be induced by structural properties of its environment. Three consequences follow:
 
-The world is made of text. Agents read utterances and emit tagged actions; the
-substrate is the one the base model was trained on. This matters more than it
-first appears: **we get modality match for free.** The transfer question is
-therefore not "text versus world" but "does the *structure* of the world cover
-the structure of the task". We are adding structural priors — scarcity,
-mortality, other minds, irreversibility — on top of a substrate the model
-already inhabits.
+1. A capability absent from the world cannot appear in the population.
+2. A structure that is present but trivially satisfiable selects for the trivial exploit rather than the capability. Cheap, available, failing actions are selected continuously if unmonitored — this degrades a population faster than the structure's absence would.
+3. Structure must therefore be designed, measured, and validated like data. Understanding what a world induces is the central work of the programme.
 
-The world's single currency is device memory. Agents hold KV blocks for their
-context and blocks for their adapter; when a room's pool is exhausted, someone
-dies. Nothing is scored, nothing is rewarded, and no gradient is computed
-anywhere in this codebase. An agent's genome is a set of LoRA factors; children
-inherit them from two parents by recombination and mutation. Selection is
-entirely circumstantial: agents that get more children into the world leave more
-descendants, and whatever caused that is what propagates.
+**The dataset is partly endogenous.** A corpus is fixed and exogenous; a world containing other evolving agents is not. Much of what any agent encounters is produced by the population itself, so the effective training distribution is co-created and non-stationary. Only the world's physics is exogenous. This is a genuine disanalogy with pre-training, and it is where the interesting dynamics live rather than a defect to be engineered away — but it means "designing the dataset" here means designing the constraints under which a distribution is generated, not the distribution itself.
 
-That circumstantiality is the point. A reward function specifies what to
-optimise, and therefore bounds what can be discovered by the imagination of
-whoever wrote it. A world specifies what is *possible*, and lets selection find
-what pays.
+## Substrate and Mechanics
 
----
+**Modality match.** The world is made of text. Agents read utterances and emit tagged actions in the base model's native substrate. The question is never "text versus world" but whether the structure of the world covers the structure of the task. Structural priors — scarcity, mortality, other minds, irreversibility — are layered over a substrate the model already inhabits.
 
-## The world is the dataset
+**Currency.** Device memory is the single currency. Agents hold KV blocks for context and adapter blocks for weights against one pool; when a room's pool is exhausted, an agent dies.
 
-Everything that a population can learn must be induced by some structure in the
-world it lived in. Three consequences follow, and they are the whole research
-programme:
+**Genetics and selection.** An agent's genome is its LoRA factors, inherited by recombination and mutation from two parents. Selection is strictly circumstantial: agents that produce more surviving offspring leave more descendants. There is no score, reward, or fitness function in the loop.
 
-**A capability absent from the world cannot be in the population.** If nothing
-in the world requires modelling another agent, no amount of selection will
-produce agents that model each other. This is not a subtle failure mode; it is
-the default one.
+**Circumstantiality.** A reward function bounds discovery by its author's imagination. A world defines what is possible and lets selection find what works.
 
-**A structure that is present but trivially satisfiable selects for the
-trivial exploit rather than the capability.** If the world offers an action
-that is cheap, always available and always fails, populations will find it and
-do nothing else — and every metric that counts well-formed actions will call
-that health. This has already happened to us more than once.
+Measurement is not optimisation. The programme measures a great deal, but no measured quantity is fed back into selection; metrics exist to interpret what a world induced, not to steer it.
 
-**Structure must therefore be designed, measured and validated like data.**
-"We built a world and ran it" is the equivalent of "we scraped some text". The
-interesting work is knowing what a world induces, which is the subject of
-Phase 2.
+## Core Research Questions
 
----
+Analysis metrics correspond directly to these.
 
-## What we need to know
+| |Question|What it settles|
+|---|---|---|
+|**Q1**|Can selection act at all?|Whether differential reproduction exceeds random drift at the effective population size.|
+|**Q2**|Is variation created and preserved?|Whether mutation is balanced between premature genome convergence and destroyed inheritance.|
+|**Q3**|Is anything transmitted?|Whether behavioural resemblance across generations is genetic rather than environmental.|
+|**Q4**|Is anything improving?|Cross-generational survival and living efficiency, controlled for density and survivorship.|
+|**Q5**|Does an agent change while it lives?|Weight-borne inherited priors versus in-context learning within a lifetime.|
+|**Q6**|Is the world selecting for anything worth having?|Whether strategies are non-degenerate and built-in structures remain load-bearing.|
+|**Q7**|Does any of it leave the world?|Whether late-generation genomes beat generation-zero genomes on external tasks.|
+|**Q8**|What world structure induces what capability?|The mapping from structural primitives to target task families.|
 
-These questions are numbered so that metrics can cite them. Every metric in
-`src/evollm/analysis/metrics/` states which of these it serves, and a question
-with no metric against it is a hole.
-
-**Q1. Can selection act at all?**
-Selection competes with drift. If the effective population size is small enough
-that random sampling dominates differential reproduction, then whatever the
-population does is not evidence of anything being selected. This bounds every
-other claim: a run that fails Q1 cannot answer Q4 meaningfully however good its
-behavioural numbers look.
-
-**Q2. Is variation created and preserved?**
-Selection consumes variation. Too little mutation and the population converges
-on one genome and stops exploring; too much and inheritance is destroyed faster
-than selection can accumulate it. There is a critical rate, and running above it
-means no information accumulates at all — the evolutionary equivalent of a
-diverged training run.
-
-**Q3. Is anything transmitted?**
-If children do not resemble their parents in what they *do*, then nothing
-learned in one generation is available to the next, and the procedure is not
-training. Transmission must be shown to be genetic rather than environmental,
-because agents that share a room resemble each other for reasons that have
-nothing to do with descent.
-
-**Q4. Is anything improving?**
-Across generations: are later populations better at living in this world than
-earlier ones, controlling for the confounds — density, survivorship, and the
-fact that a crowded room makes every rate look different.
-
-**Q5. Does an agent change while it lives?**
-Distinct from Q4 and repeatedly conflated with it. Improvement can live in the
-weights (later generations *start* better) or in the context (an agent gets
-better as it lives). These are different products: the first is inheritance of a
-prior, the second is inheritance of an ability to adapt. Only the second is
-in-context learning.
-
-**Q6. Is the world selecting for anything worth having?**
-The health of the *world*, not the population. Is behaviour dominated by a
-degenerate strategy? Are the structures we built into the world actually load
-bearing, or has the population found a way around them? A world that selects
-for something trivial produces a population with nothing to transfer, and every
-population-health metric will report success while it happens.
-
-**Q7. Does any of it leave the world?**
-The question the project is ultimately for. Is a late-generation genome better
-than a generation-zero genome at something *outside* the world it evolved in?
-Until this is measured, every result is internal and the central claim is
-untested.
-
-**Q8. What world structure induces what capability?**
-Phase 2. The mapping from the structural primitives of a world to the task
-families they produce.
-
----
+Q1–Q6 concern the mechanism, Q7 concerns transfer, Q8 concerns design. They are ordered by dependency: an affirmative answer to a later question is uninterpretable without the earlier ones.
 
 ## Phases
 
-### Phase 1 — Can anything be learned at all? *(current)*
+The phases are an ordering of dependencies, not a schedule.
 
-The simplest world we can defend: one currency, a handful of actions, rooms on a
-small graph, no task, no reward. The purpose of Phase 1 is **not** to produce a
-useful population. It is to establish that the procedure is a training procedure
-at all — that selection can act, that variation survives, that behaviour is
-transmitted, and that we can tell the difference between learning and drift.
+### Phase 1 — Capability Baseline
 
-Almost all of the work so far has been building the instruments to answer Q1–Q6
-and discovering how many ways the answers can be faked.
+Establish a minimal world — one currency, basic actions, graph-structured rooms, no reward — and show that the pipeline is a valid training procedure at all. The world is deliberately impoverished; the object of study is the mechanism, not the population.
 
-**Phase 1 exits when all four hold:**
+Complete when all four hold:
 
-1. **Selection acts.** Effective population size is clear of the drift
-   threshold for the traits we care about, and heritability is positive with a
-   midparent/single-parent ratio near 2.
-2. **Something improves, and is inherited.** A behavioural improvement across
-   generations that survives controlling for density and survivorship, and that
-   is transmitted parent to child.
-3. **The world is not degenerate.** No single action dominates the action mix,
-   and the population is not carried by agents repeating one turn until they
-   die.
-4. **Something leaves the world.** A held-out probe shows late-generation
-   genomes beating generation-zero genomes on a task the world never contained.
+1. **Selection acts.** Differential reproduction clears an explicit drift threshold, with positive heritability. The signature to look for is a midparent–offspring regression slope significantly above zero, with the single-parent slope at roughly half the midparent slope, indicating additive transmission rather than shared environment.
+2. **Inherited improvement.** Cross-generational behavioural gains survive controls for density and survivorship bias.
+3. **Non-degenerate world.** Action mix stays diverse; survival does not rest on a trivial repetitive loop.
+4. **Transmission is genetic.** Offspring resemblance to parents exceeds resemblance to contemporaries sharing the same environment.
 
-Criteria 1–3 are measurable with what exists today. Criterion 4 requires
-machinery we have not built, and building it is the bridge to Phase 2.
+Note that transfer is _not_ a Phase 1 criterion. A world with no designed structure is predicted to produce no transfer; testing for it here would test nothing.
 
-### Phase 2 — World design
+### Phase 2 — World Design
 
-Given a procedure that demonstrably trains, the question becomes what to train
-*for*, which under this thesis means what world to build. Phase 2 makes the
-world the independent variable: build worlds with specified structure, measure
-what dispositions they induce, and accumulate the mapping.
+Make the world the independent variable: build structured environments, measure the dispositions they induce, and turn the primitive-to-capability mapping from a set of predictions into a model with predictive power on unseen structures.
 
-The deliverable of Phase 2 is not a population. It is **knowledge about world
-design** — the beginnings of a theory that says, given a task family you care
-about, what structure a world must have to induce it.
+This is where the core claim is at risk, because it is the first point at which coverage is asserted in advance and can fail.
 
-#### World structure → task family
+### Phase 3 — Harvest and Transfer
 
-The working map. Each row is a structural primitive that can be present or
-absent from a world, and the task family we expect it to induce. Every row is a
-hypothesis, not a finding; the entries are what Phase 2 exists to confirm,
-refute and refine.
+Fine-tune evolved population members on downstream tasks and compare against generation-zero genomes fine-tuned identically, at matched compute. The comparison must be matched on compute, not on gradient steps, since evolution spends its budget on forward passes.
 
-| structural primitive | what an agent must do to survive it | task family it should induce |
+**Deliverable:** a diverse evolved population — a high-value search space for downstream selection — rather than a single static model.
+
+## Structural Primitives and Task Families
+
+The following are pre-registered predictions, not findings. Phase 2 exists to test them, and the mapping's value lies in being specific enough to be wrong.
+
+|Structural primitive|Survival requirement|Predicted task family|
 |---|---|---|
-| **Scarcity of a shared resource** | spend a finite budget on the actions worth taking | budgeting, prioritisation, cost-aware tool use, knowing when to stop |
-| **Mortality and irreversibility** | avoid unrecoverable states | risk assessment, caution, hedging, safe exploration |
-| **Other agents with private state** | infer what it cannot observe | theory of mind, asking, inference from behaviour |
-| **Consent required from a counterparty** | make another agent choose you | negotiation, persuasion, offer construction, reciprocity |
-| **Communication with no fixed protocol** | invent and share a convention | protocol formation, grounding, instruction-following |
-| **Topology with movement cost** | decide where to be | planning, search, exploration/exploitation trade-offs |
-| **Heterogeneous, persistent partners** | tell counterparties apart and remember them | partner selection, reputation, trust |
-| **Delayed consequence** | act now for a payoff later | credit assignment over a horizon, patience |
-| **Congestion for limited slots** | act in concert with others | coordination, turn-taking, queuing, conflict avoidance |
+|Scarcity of a shared resource|Spend a finite budget only on high-value actions|Budgeting, prioritisation, cost-aware tool use|
+|Mortality and irreversibility|Avoid unrecoverable terminal states|Risk assessment, caution, hedging, safe exploration|
+|Other agents with private state|Infer unobservable information|Theory of mind, query generation, behavioural inference|
+|Consent required from a counterparty|Induce autonomous selection by another agent|Negotiation, persuasion, offer framing, reciprocity|
+|Communication without a fixed protocol|Establish shared convention|Protocol formation, grounding, instruction following|
+|Topology with movement cost|Position well in space|Spatial planning, path search, explore/exploit trade-offs|
+|Heterogeneous persistent partners|Identify and remember counterparties|Partner selection, reputation, trust modelling|
+|Delayed consequence|Act now for later payout|Credit assignment, long-horizon planning, patience|
+|Congestion for limited slots|Synchronise with peers|Coordination, turn-taking, queuing, conflict avoidance|
 
-Two rules read off the table, both learned the hard way:
+An absent row predicts an absent capability. A cheaply satisfiable row predicts worse than an absent one, because it selects for the shortcut.
 
-- **A row absent from the world is absent from the population.** You cannot
-  select for negotiation in a world where nobody has to agree to anything.
-- **A row present but cheap to satisfy is worse than absent**, because the
-  population will find the cheap satisfaction and stop. A primitive is only
-  load bearing if the trivial route through it is closed.
+## Falsification
 
-The second rule is why Q6 is a first-class question rather than housekeeping,
-and why reading raw behaviour is part of the process rather than an optional
-extra.
+### The thesis
 
-### Phase 3 — Harvest and transfer
+Each condition is indexed to the phase in which it can be evaluated. None can be assessed earlier.
 
-Take a population produced by a designed world and use it: fine-tune members
-for downstream tasks and compare against the same base model fine-tuned without
-the population stage. The claim under test is that starting from an evolved
-agent beats starting from a text predictor, on tasks that share structure with
-the world — and that the advantage grows with how well world structure and task
-structure match.
+- **No selection (Phase 1).** Differential reproduction does not exceed drift, or nothing heritable is transmitted, under any workable configuration of population size and mutation rate. Selection is the premise of everything downstream.
+- **No coverage (Phase 2).** Given a world designed to cover task family _F_, evolved populations show no advantage on held-out members of _F_ over generation-zero populations. Repeated across families, this falsifies the core claim: world structure does not determine what transfers.
+- **Environment overfitting (Phase 2–3).** Populations improve inside the world but gains are confined to its mechanics, with no disposition that survives a change of surface form.
+- **No native agency (Phase 3).** Late-generation genomes transfer to task families that need only competence, but not to those requiring self-modelling, other-modelling, or continuation-seeking. This is the operational form of "behaviour without agency" — and the only form of it that is testable, since it lives entirely in generalisation.
 
-The product of Phase 3 is a **population**, not a model. Its diversity is an
-asset rather than merely a health indicator: it is the search space that
-downstream selection draws from.
+### Instantiation
 
----
+These would end a particular implementation without bearing on the thesis. They are listed separately so that abandoning an implementation is not mistaken for abandoning the claim.
 
-## What would falsify this
+- **Narrow channel.** Low-rank adapters over a frozen base lack the capacity to express the dispositions in question. Indicates a different genome, not a different thesis.
+- **Weak selection.** Effective population size cannot be scaled far enough for selection to beat drift within available compute. A resource limit.
+- **Substrate artefacts.** Verbosity or terseness pressures, memory-allocation pathologies, or handshake base rates near zero at generation zero, none of which are properties of population training as such.
 
-Stated plainly, so that we notice if it happens:
+## Non-Goals
 
-- **The channel is too narrow.** Dispositions may not be expressible in a
-  low-rank adapter over a frozen base at all. If capacity is the binding
-  constraint, no amount of world design helps, and the honest conclusion is
-  that the genome must be something else.
-- **Selection is too weak to matter.** If effective population size cannot be
-  raised into a regime where selection beats drift at achievable scale, the
-  procedure cannot accumulate anything however long it runs.
-- **Nothing transfers.** Populations may adapt to the world in ways that are
-  entirely specific to it — overfitting to the environment, with no
-  disposition underneath. This is the most likely interesting failure, and Q7
-  is the only thing that can detect it.
-- **Behaviour without agency.** Populations may improve at surviving while
-  failing every component of the definition above: no self-modelling, no
-  other-modelling, just a better reflex. That would be a real result and not
-  the one we want.
-
----
-
-## Non-goals
-
-- **Beating a task benchmark in Phase 1.** The world is not a benchmark and
-  performance in it is not the product.
-- **Gradient-based training.** No backward pass exists in this codebase, by
-  design. The genome is what is selected.
-- **Realism.** Worlds are instruments, chosen for what structure they isolate,
-  not for resembling anything.
-- **Emergent language for its own sake.** Communication matters here because it
-  is a structural primitive that induces task families, not as a phenomenon to
-  admire.
-
+- **Benchmarking in Phase 1.** In-world performance is an intermediate signal, never the product.
+- **Gradients in the selection loop.** Selection acts on the genome; the loop contains no backward pass.
+- **Realism.** Environments are abstract functional instruments for isolating structures, not simulations of anything.
+- **Emergent language for its own sake.** Communication is studied only as a structural primitive that induces task capabilities.
 ---
 
 ## Appendix: where this came from
