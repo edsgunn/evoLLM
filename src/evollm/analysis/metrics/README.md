@@ -33,9 +33,23 @@ different amounts of the same one.
 1. **Can selection act?** — `effective-population-size.md`, `heritability.md`
 2. **Is variation being created or destroyed?** — `mutation-rate.md`,
    `population-structure.md`
-3. **Is anything actually improving?** — `behaviour.md`
+3. **Is anything actually improving?** — `behaviour.md`, `surprise.md`
 
 A run that cannot answer (1) affirmatively cannot answer (3) meaningfully, no
 matter what its behavioural numbers look like. That ordering has caught us out
 before: reproduction rising across generations looked like adaptation until
 density was controlled for.
+
+## A fourth question, added late
+
+4. **Does an agent change while it lives?** — `surprise.md`
+
+Every metric under (1)-(3) is a lifetime aggregate: one number per agent,
+covering its whole life. That framing cannot see change *within* a life, and
+in-context surprise minimisation — the project's own hypothesis — is precisely
+a claim about change within a life. The gap was invisible for a long time
+because nothing in the report was shaped to expose it.
+
+Read `surprise.md` for the direct measure and the behavioural proxy that works
+on runs predating it, and always read the **paired within-agent** figure rather
+than the population curve, which survivorship bends downward on its own.

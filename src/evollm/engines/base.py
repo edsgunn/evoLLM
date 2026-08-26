@@ -8,8 +8,17 @@ from ..genome import Genome
 
 @dataclass(frozen=True)
 class TurnToken:
-    """One sampled token of an action turn."""
+    """One sampled token of an action turn.
+
+    `logprob` is the model's log-probability of the token it actually sampled,
+    or None if the backend was not asked for it. Summed over a turn this is the
+    negative log-likelihood of the agent's own output under its own weights —
+    the only direct read on surprise the project has. It is per-token because
+    an agent's turns vary in length by an order of magnitude, so a per-turn
+    total says more about verbosity than about prediction.
+    """
     id: int
+    logprob: float | None = None
 
 
 @dataclass(frozen=True)
@@ -32,6 +41,26 @@ class TurnHandle(ABC):
 
     @abstractmethod
     async def abort(self) -> None: ...
+
+    def take_prompt_logprobs(self) -> list[float | None] | None:
+        """Log-probabilities of the PROMPT tokens, aligned to the prompt the
+        turn was started with, or None if the backend does not provide them.
+
+        Entry i is the model's log-probability of prompt token i given tokens
+        < i. Entries are None where the backend did not compute one: position
+        0 has no context, and a position served from the prefix cache was
+        scored on an earlier turn and is not rescored.
+
+        That last point is the whole reason this is affordable. The uncached
+        suffix of a turn's prompt is exactly the tokens the world appended
+        since the agent last spoke — its new observations — so the only extra
+        work is a logits matmul over those positions, on hidden states the
+        prefill had to compute anyway.
+
+        Returns the value once and clears it; a turn yields prompt logprobs at
+        most once, when its prefill completes.
+        """
+        return None
 
 
 class EngineBackend(ABC):

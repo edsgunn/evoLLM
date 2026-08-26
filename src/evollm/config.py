@@ -294,6 +294,41 @@ class RunConfig:
     # parsed. Costs log volume only, and is the only way to see what agents
     # actually emit — without it a malformed turn is a bare counter.
     trace_turns: int = 0
+    # Trace EVERY turn of this fraction of agents, chosen by a hash of the
+    # agent id, instead of the first `trace_turns` turns the room happens to
+    # produce.
+    #
+    # The plain budget makes within-lifetime questions unanswerable. It fills
+    # up early, so the traced turns all belong to agents alive in the opening
+    # of the run, and each traced life is a prefix rather than a life. Asking
+    # "does an agent improve as it lives" of that sample asks it only of the
+    # founders, and only of their first turns. Sampling agents instead gives
+    # whole lives, spread evenly over the run, for the same log volume.
+    # `trace_turns` still caps total volume.
+    trace_agent_fraction: float = 0.0
+
+    # Ask the backend for the log-probability of each token an agent samples.
+    #
+    # The project's hypothesis is that agents come to find their world less
+    # surprising. Nothing measured that: every metric was behavioural, and
+    # `eval-surprise` scores snapshots against held-out streams offline rather
+    # than watching surprise move during a life.
+    #
+    # Both directions are scored. Surprise over the agent's OWN tokens is
+    # nearly free (the log-softmax is computed for sampling anyway) and is the
+    # fluency baseline. Surprise over the tokens the WORLD wrote — the headline
+    # measure — costs a logits matmul over the uncached prompt suffix, which is
+    # exactly the observations absorbed since the agent last spoke. It reads
+    # whether the environment became predictable, and so whether agents act to
+    # make it so; averaging over a whole context instead would be dominated by
+    # the agent's own output and would answer neither question.
+    #
+    # Defaults OFF. The prompt-logprob path has never run on a GPU, and four
+    # 12-hour jobs are queued that will pick up whatever code is on disk when
+    # they start. Turning this on by default would enable an unproven path in
+    # all of them at once; runs are the scarcest resource here. Enable it
+    # explicitly, per config, and let one run prove it first.
+    record_surprise: bool = False
 
     # Periodically dump raw agent contexts, verbatim, exactly as the model
     # reads them — special tokens and all.

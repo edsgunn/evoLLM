@@ -190,15 +190,44 @@ show.
 
 ### Blind spots in what we measure
 
-- **Surprise has never been measured.** `evollm eval-surprise` exists and has
-  never been run. The project's hypothesis is about surprise minimisation.
-- **Nothing measures change within an agent's lifetime.** Every trait is a
-  lifetime aggregate. A first look finds no within-life improvement, and a small
-  significant *decline* in one run — which would mean all measured improvement
-  lives in the initialisation, not in the context. — *provisional*
-- **No analysis reads what agents say.** Tens of thousands of turns of raw text
-  per run, never examined; nor whether a reply is conditioned on what was
-  received.
+- ~~**Surprise has never been measured.**~~ **Now instrumented, never yet run.**
+  Surprise is recorded over the tokens the *world* wrote into an agent's
+  context — whether the environment became predictable to it — bucketed by
+  position in the agent's own life and carried on every death event. The
+  agent's surprise at its own output is kept separately as the fluency
+  control. Off by default until one run proves the GPU path. —
+  `src/evollm/analysis/metrics/surprise.md`
+- ~~**Nothing measures change within an agent's lifetime.**~~ **Now measured
+  two ways** (`analysis.lifecourse`): observation surprise from death records,
+  and canonical rate by within-life quantile from traces, both paired within
+  agent. The behavioural read works on every run ever done. What it says so
+  far: **no within-life improvement anywhere, and a significant decline in the
+  reference run** (−0.74 pp ± 0.41, n=2,445, paired). If that survives the
+  surprise measurement, all measured improvement lives in the initialisation
+  rather than in the context. — *likely* —
+  `runs/node_4room_7b_chr001_evict_6127798/NOTES.md`
+- ~~**No analysis reads what agents say.**~~ **Now read on every run**
+  (`evollm inspect-traces`). It found two things nothing else could — see
+  below. Still unread: whether a reply is *conditioned on* what was received,
+  which needs a model, not string matching (`inspect-traces --bundle`).
+
+### What reading the traces found
+
+- **Communication has effectively collapsed, in every run.** `tell` is 0.3-2%
+  of all actions; `say` is ~0%. In the reference run: 1,000 tells against
+  173,988 mate requests and 180,003 move attempts. Agents move and court; they
+  do not talk. This is not a trace artefact — it holds over the full event
+  stream. — *established* — `evollm inspect-traces`
+- **A quarter to a third of agents are stuck.** 1,069 of 3,671 traced agents in
+  the reference run emitted the *identical* turn for 80%+ of their traced life,
+  usually a single `<go>`. Every parse-based metric scores these as canonical
+  well-formed actions, so they have been counted as healthy behaviour
+  throughout. — *established* — same
+- **The placeholder tic is not confined to `go`.** `<mate>sender_id</mate>` and
+  `<mate>agent_id</mate>` are 2.4% of turns in the reference run. Analyses that
+  counted only move targets undercounted it. — *established* — same
+- **Most moves fail.** 98,471 failed against 81,532 succeeded in the reference
+  run — 55% of attempts. — *established* — same
 
 ### Holes in what we have already run
 

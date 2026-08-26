@@ -52,6 +52,10 @@ what each means and how it misleads.
 | diversity between agents (relative) | | |
 | placeholder share of move attempts | | |
 | **within-lifetime change** (last fifth − first fifth, paired) | | |
+| **observation surprise, paired within-agent change** | | |
+| surprise: starting level vs generation | | |
+| stuck agents (same turn 80%+ of life) | | |
+| communication share (`tell`+`say` of all actions) | | |
 
 ## Trends across generations
 

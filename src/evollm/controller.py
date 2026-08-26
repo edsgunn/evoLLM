@@ -12,6 +12,7 @@ allocation failure is an integrity violation, not a game event (§4.3).
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -21,7 +22,8 @@ import numpy as np
 from . import prompts
 from .actions import (Accept, Action, Go, Mate, Noop, Say, Tell, classify,
                       complete_action)
-from .agent import Agent, Mode, PendingMate
+from .agent import (ORIGIN_FRAME, ORIGIN_GEN, ORIGIN_OBS, Agent, Mode,
+                    PendingMate)
 from .blocks import BlockPool
 from .config import EVICT_RANDOM_HOLDER, EVICT_REQUESTER, Config
 from .engines.base import EngineBackend, TurnEnded, TurnHandle, TurnToken
@@ -30,6 +32,38 @@ from .genome import Genome
 
 if TYPE_CHECKING:
     from .world import World
+
+
+def _surprise_fields(agent: Agent) -> dict:
+    """Surprise for a death record.
+
+    `obs_nll_curve` is the whole within-life curve: mean surprise over the
+    observation tokens the agent absorbed while in each turn bucket, None where
+    it did not live that long. Carried on every death, so "does an agent come
+    to find its world less surprising, and does that change across
+    generations" is answerable for the entire population rather than for the
+    traced sample.
+
+    `gen_nll` is the fluency baseline. A fall in observation surprise means
+    little if the lineage simply became more confident about everything.
+
+    Emits nothing when the backend supplied no logprobs, so a run with
+    `record_surprise` off produces exactly the events it always did.
+    """
+    if not sum(agent.obs_nll_tokens) and not agent.gen_nll_tokens:
+        return {}
+    curve = agent.obs_nll_curve()
+    obs = agent.mean_obs_nll
+    gen = agent.mean_gen_nll
+    return {
+        "obs_nll": round(obs, 4) if obs is not None else None,
+        "obs_nll_tokens": sum(agent.obs_nll_tokens),
+        "obs_nll_curve": [round(v, 4) if v is not None else None
+                          for v in curve],
+        "obs_nll_counts": list(agent.obs_nll_tokens),
+        "gen_nll": round(gen, 4) if gen is not None else None,
+        "gen_nll_tokens": agent.gen_nll_tokens,
+    }
 
 
 class RoomController:
@@ -177,14 +211,17 @@ class RoomController:
         """
         u = agent.obs_queue.popleft()
         toks: list[int] = []
+        kinds: list[int] = []
         if not agent.obs_block_open:
             header = self.engine.block_prefix(
                 u.role, first=agent.blocks_opened == 0)
             toks += header
+            kinds += [ORIGIN_FRAME] * len(header)
             agent.tokens_framing += len(header)
             agent.obs_block_open = True
             agent.blocks_opened += 1
         toks += u.body
+        kinds += [ORIGIN_OBS] * len(u.body)
         # Without chat format there are no blocks to merge into, so each
         # utterance keeps its own turn-end exactly as before.
         merge = (self.cfg.world.chat_format
@@ -193,14 +230,17 @@ class RoomController:
                  and agent.obs_queue[0].role == u.role)
         if merge:
             toks += self._obs_separator
+            kinds += [ORIGIN_FRAME] * len(self._obs_separator)
             agent.tokens_framing += len(self._obs_separator)
             agent.obs_closes_block = False
         else:
             # The turn-end is the queue's own delimiter, not inserted framing,
             # and has never been charged to tokens_framing.
             toks.append(self.engine.turn_end_id)
+            kinds.append(ORIGIN_FRAME)
             agent.obs_closes_block = True
         agent.obs_emit.extend(toks)
+        agent.obs_emit_kind.extend(kinds)
 
     def _begin_action_turn(self, agent: Agent) -> None:
         """Open the assistant block, then let the model speak into it."""
@@ -297,8 +337,10 @@ class RoomController:
         whole_utterance = self.cfg.world.observation_absorption == "utterance"
         while agent.obs_emit:
             tok = agent.obs_emit.popleft()
+            kind = agent.obs_emit_kind.popleft() if agent.obs_emit_kind \
+                else ORIGIN_OBS
             agent.tokens_observed += 1
-            if not self._append_token(agent, tok):
+            if not self._append_token(agent, tok, kind):
                 return  # died mid-utterance
             if agent.obs_emit and not whole_utterance:
                 return  # one token per step
@@ -321,7 +363,7 @@ class RoomController:
             # Opening the assistant block costs tokens like anything else.
             tok = agent.pending_emit.popleft()
             agent.tokens_framing += 1
-            self._append_token(agent, tok)
+            self._append_token(agent, tok, ORIGIN_FRAME)
             return
 
         if agent.pending_turn_end:
@@ -336,16 +378,20 @@ class RoomController:
         handle = self.turns.get(agent.id)
         if handle is None:
             budget = self._turn_budget(agent)
+            agent.prev_turn_prompt_len = agent.turn_prompt_len
+            agent.turn_prompt_len = len(agent.context)
             handle = self.engine.start_turn(agent.id, list(agent.context), budget)
             self.turns[agent.id] = handle
 
         event = await handle.next_event()
+        self._absorb_prompt_surprise(agent, handle)
 
         if agent.id in self._died_this_step or agent.id not in self.agents:
             return  # evicted while we awaited; token discarded with the soma
 
         if isinstance(event, TurnToken):
             agent.tokens_generated += 1
+            agent.record_generated_surprise(event.logprob)
             agent.decay_mate_windows()
             if not self._append_token(agent, event.id):
                 return
@@ -641,10 +687,16 @@ class RoomController:
         self._pending_arrivals.append(agent)
 
     # ── the append: where scarcity resolves (§2.5) ────────────────────────
-    def _append_token(self, agent: Agent, tok: int) -> bool:
+    def _append_token(self, agent: Agent, tok: int,
+                      origin: int = ORIGIN_GEN) -> bool:
         """Append one token to the agent's context, allocating KV blocks.
         Returns False iff the agent died in the attempt. Death occurs when and
-        only when a new block is needed and the pool is empty."""
+        only when a new block is needed and the pool is empty.
+
+        `origin` records who put the token there. It is kept parallel to the
+        context because surprise is only interpretable per origin, and this is
+        the one place a context token is ever appended — deriving origin later
+        from token ids would be guesswork."""
         new_count = agent.tokens + 1
         while not self.pool.try_grow_kv(agent.id, new_count):
             if self.cfg.world.eviction == EVICT_REQUESTER:
@@ -678,6 +730,7 @@ class RoomController:
                 "the context ceiling is binding before scarcity, so deaths in "
                 "this run are not attributable to the pool (§4.3)")
         agent.context.append(tok)
+        agent.token_origin.append(origin)
         return True
 
     def _kill(self, agent: Agent, cause: str) -> None:
@@ -715,6 +768,11 @@ class RoomController:
             children=agent.children, moves=agent.moves,
             mean_action_tokens=round(
                 agent.tokens_generated / max(agent.action_turns_completed, 1), 2),
+            # Surprise over the whole life, and split at
+            # run.surprise_split_turns. Carried on the death event so that
+            # within-lifetime change is measurable for every agent that ever
+            # lived, not only the traced sample.
+            **_surprise_fields(agent),
         )
 
     # ── takeoff (§7) ──────────────────────────────────────────────────────
@@ -760,7 +818,50 @@ class RoomController:
             self.log.emit(self.step_count, "takeoff_lost", room=self.room_id,
                           births_in_window=births, refills_in_window=refills)
 
+    def _absorb_prompt_surprise(self, agent: Agent, handle) -> None:
+        """File this turn's prompt logprobs under the observation tokens.
+
+        The backend scores only the positions it had to recompute, which is the
+        suffix the world appended since the agent last spoke. Of those, only
+        ORIGIN_OBS positions count: framing is boilerplate the model predicts
+        almost perfectly and would swamp the signal, and the agent's own
+        tokens measure its fluency rather than its world.
+
+        Filed at the agent's CURRENT within-life bucket, so a long life yields
+        a curve rather than a single number.
+        """
+        scores = handle.take_prompt_logprobs()
+        if not scores:
+            return
+        origin = agent.token_origin
+        total, n = 0.0, 0
+        start = agent.prev_turn_prompt_len
+        stop = min(len(scores), agent.turn_prompt_len, len(origin))
+        for i in range(start, stop):
+            lp = scores[i]
+            if lp is not None and origin[i] == ORIGIN_OBS:
+                agent.record_observation_surprise(lp)
+                total += -lp
+                n += 1
+        agent.last_turn_obs_nll = total / n if n else None
+
     # ── instrumentation ───────────────────────────────────────────────────
+    def _is_traced(self, agent: Agent) -> bool:
+        """Whether this agent's whole life is being traced.
+
+        Deterministic in the agent id, so the decision is stable across a
+        restart and identical for the same id in any room, and independent of
+        birth order — which is what keeps the traced sample from being the
+        founders.
+        """
+        frac = self.cfg.run.trace_agent_fraction
+        if frac <= 0:
+            return True          # legacy behaviour: trace until the budget goes
+        if frac >= 1:
+            return True
+        h = hashlib.blake2b(agent.id.encode(), digest_size=8).digest()
+        return int.from_bytes(h, "big") / 2**64 < frac
+
     def _trace_turn(self, agent: Agent, text: str, parsed, thinking: int,
                     turn_tokens: int) -> None:
         """Record the raw text of a turn and how it parsed. Without this a
@@ -768,12 +869,22 @@ class RoomController:
         that cannot follow the protocol from one that is a comma away."""
         if self._traced >= self.cfg.run.trace_turns:
             return
+        if not self._is_traced(agent):
+            return
         self._traced += 1
+        nll = agent.last_turn_obs_nll
         self.log.emit(self.step_count, "turn", agent=agent.id,
                       generation=agent.generation,
                       action=type(parsed.action).__name__,
                       form=parsed.form, thinking_tokens=thinking,
                       turn_tokens=turn_tokens, context_tokens=agent.tokens,
+                      # Position in this agent's OWN life. Recoverable by
+                      # counting traced turns only when every turn of that
+                      # agent is traced; recorded so partial traces stay
+                      # analysable.
+                      turn_index=agent.action_turns_completed,
+                      age=agent.age,
+                      obs_nll=round(nll, 4) if nll is not None else None,
                       text=text[:600])
 
     def _maybe_report_viability(self, agent: Agent) -> None:

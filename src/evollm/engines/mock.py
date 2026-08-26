@@ -44,15 +44,23 @@ class WordTokenizer:
 
 
 class MockTurnHandle(TurnHandle):
-    def __init__(self, token_ids: list[int], max_tokens: int):
+    def __init__(self, token_ids: list[int], max_tokens: int,
+                 logprob: float | None = None,
+                 prompt_logprobs: list[float | None] | None = None):
         natural = len(token_ids) < max_tokens
         self._queue = deque(token_ids[:max_tokens])
         self._natural = natural
+        self._logprob = logprob
+        self._prompt_logprobs = prompt_logprobs
         self.aborted = False
+
+    def take_prompt_logprobs(self) -> list[float | None] | None:
+        out, self._prompt_logprobs = self._prompt_logprobs, None
+        return out
 
     async def next_event(self) -> TurnToken | TurnEnded:
         if self._queue:
-            return TurnToken(self._queue.popleft())
+            return TurnToken(self._queue.popleft(), logprob=self._logprob)
         return TurnEnded(natural=self._natural)
 
     async def abort(self) -> None:
@@ -73,6 +81,10 @@ class MockEngine(EngineBackend):
         self.default_policy = default_policy or quiet_policy
         self.policies = policies or {}
         self.rng = np.random.default_rng(seed)
+        # None means "this backend reports no logprobs", which is the default
+        # so that existing tests see exactly the behaviour they always did.
+        self.logprob: float | None = None
+        self._scored: dict[str, int] = {}
         self.registered: dict[str, Genome] = {}
         self.unregistered: list[str] = []
         self._capacity_blocks = capacity_blocks
@@ -106,7 +118,21 @@ class MockEngine(EngineBackend):
                    max_tokens: int) -> TurnHandle:
         policy = self.policies.get(agent_id, self.default_policy)
         text = policy(agent_id, self.detokenize(context), self.rng)
-        return MockTurnHandle(self.tokenize(text), max_tokens)
+        prompt_lp = None
+        if self.logprob is not None:
+            # Stand-in for a real backend: score only the suffix that a prefix
+            # cache would not have covered, so tests exercise the same partial
+            # alignment the GPU path produces rather than a dense list the
+            # controller would never see.
+            n = len(context)
+            start = max(0, self._scored.get(agent_id, 0))
+            prompt_lp = [None] * n
+            for i in range(start, n):
+                prompt_lp[i] = self.logprob
+            self._scored[agent_id] = n
+        return MockTurnHandle(self.tokenize(text), max_tokens,
+                              logprob=self.logprob,
+                              prompt_logprobs=prompt_lp)
 
 
 # ── canned policies ───────────────────────────────────────────────────────

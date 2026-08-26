@@ -20,6 +20,10 @@ from .pedigree import Pedigree
 from .phenotypes import (ALL_TRAITS, TRAIT_GROUPS, build_phenotypes,
                          strategy_matrix)
 from .descent import Descent
+from .traces import (build_bundle, format_inspection, inspect,
+                     sample_for_review)
+from .lifecourse import (action_curve, format_lifecourse,
+                        surprise_curve)
 from .stats import (associate, associate_alleles, benjamini_hochberg,
                     kmeans, mutual_information, ols,
                     parent_offspring_concordance, principal_components,
@@ -33,7 +37,9 @@ __all__ = [
     "build_phenotypes", "strategy_matrix", "TRAIT_GROUPS", "ALL_TRAITS",
     "build_genotypes", "genotype_matrix", "load_genome_features",
     "snapshot_paths", "load_fingerprints", "align",
-    "Descent", "variance_partition", "associate", "associate_alleles",
+    "Descent", "surprise_curve", "action_curve",
+    "format_lifecourse", "inspect", "format_inspection",
+    "sample_for_review", "build_bundle", "variance_partition", "associate", "associate_alleles",
     "replication", "kmeans", "mutual_information",
     "parent_offspring_concordance", "sibling_concordance",
     "principal_components", "residualise", "ols", "benjamini_hochberg",

@@ -16,6 +16,18 @@ from enum import Enum
 
 from .genome import Genome
 
+# Where a context token came from. Surprise is only interpretable per origin.
+ORIGIN_FRAME = 0    # chat markers the world inserted
+ORIGIN_OBS = 1      # what the world said to this agent
+ORIGIN_GEN = 2      # what this agent emitted itself
+
+# Within-life turn buckets for the surprise curve: turns [0,5), [5,10),
+# [10,20), [20,40), [40,80), [80,inf). Widening geometrically keeps the
+# early turns — where any fast adaptation would show — at fine resolution
+# without spending buckets on the long tail of a few very old agents.
+SURPRISE_BUCKET_EDGES = (5, 10, 20, 40, 80)
+N_SURPRISE_BUCKETS = len(SURPRISE_BUCKET_EDGES) + 1
+
 
 class Mode(Enum):
     OBSERVING = "observing"
@@ -70,6 +82,10 @@ class Agent:
     obs_queue: deque[QueuedUtterance] = field(default_factory=deque)
     # Framed tokens of the utterance currently being absorbed.
     obs_emit: deque[int] = field(default_factory=deque)
+    # Origin of each token in obs_emit, popped in lockstep with it: an
+    # utterance carries both world content and the chat framing around it, and
+    # only the content is an observation to be surprised by.
+    obs_emit_kind: deque[int] = field(default_factory=deque)
     # True while a user block is open in context and further observations can
     # be appended into it rather than opening their own.
     obs_block_open: bool = False
@@ -104,6 +120,41 @@ class Agent:
     canonical_turns: int = 0        # ... and used the canonical <verb> syntax
     thinking_tokens: int = 0        # generated before acting, and charged for
     tokens_generated: int = 0
+    # Origin of every token in `context`, parallel to it: ORIGIN_FRAME (chat
+    # markers the world inserted), ORIGIN_OBS (what the world said to the
+    # agent) or ORIGIN_GEN (what the agent itself emitted).
+    #
+    # Surprise is only meaningful per origin. Averaged over a whole context it
+    # is dominated by the agent's own output, which measures fluency, not
+    # whether the world became predictable. Only the ORIGIN_OBS positions
+    # answer the project's actual question.
+    token_origin: bytearray = field(default_factory=bytearray)
+    # Context length at the moment the in-flight turn was started. Prompt
+    # logprobs come back aligned to that prompt, and the context has grown
+    # since, so without it the scores cannot be matched to their tokens.
+    turn_prompt_len: int = 0
+    # Context length when the PREVIOUS turn started. Everything the world
+    # appended since then lies above it, so scoring only that range counts
+    # each observation exactly once — a position below it was either scored on
+    # an earlier turn or served from the prefix cache and never rescored.
+    prev_turn_prompt_len: int = 0
+    # Mean observation surprise absorbed for the most recent turn, so a traced
+    # agent yields a per-turn series and not just a lifetime average.
+    last_turn_obs_nll: float | None = None
+    # Surprise over observation tokens, bucketed by how far into this agent's
+    # life the turn was (see SURPRISE_BUCKET_EDGES). Kept as sums and counts
+    # per bucket so a whole within-life curve costs a dozen numbers per agent
+    # and can be reported at death for EVERY agent, not just traced ones.
+    obs_nll_sum: list[float] = field(
+        default_factory=lambda: [0.0] * N_SURPRISE_BUCKETS)
+    obs_nll_tokens: list[int] = field(
+        default_factory=lambda: [0] * N_SURPRISE_BUCKETS)
+    # Surprise over the agent's own sampled tokens. Kept separately, and only
+    # in aggregate: it is the fluency baseline that observation surprise has
+    # to be read against, so that "the world got predictable" can be told
+    # apart from "this lineage got more confident about everything".
+    gen_nll_sum: float = 0.0
+    gen_nll_tokens: int = 0
     tokens_observed: int = 0
     tokens_framing: int = 0     # chat markers the world inserted
     says: int = 0
@@ -114,6 +165,43 @@ class Agent:
     moves: int = 0
     failed_moves: int = 0
     viability_reported: bool = False
+
+    def surprise_bucket(self) -> int:
+        """Which within-life bucket the agent is currently in."""
+        n = self.action_turns_completed
+        for i, edge in enumerate(SURPRISE_BUCKET_EDGES):
+            if n < edge:
+                return i
+        return N_SURPRISE_BUCKETS - 1
+
+    def record_observation_surprise(self, logprob: float) -> None:
+        """One observation token's -logprob, filed under the agent's current
+        position in its own life."""
+        b = self.surprise_bucket()
+        self.obs_nll_sum[b] += -logprob
+        self.obs_nll_tokens[b] += 1
+
+    def record_generated_surprise(self, logprob: float | None) -> None:
+        if logprob is None:
+            return
+        self.gen_nll_sum += -logprob
+        self.gen_nll_tokens += 1
+
+    @property
+    def mean_obs_nll(self) -> float | None:
+        n = sum(self.obs_nll_tokens)
+        return sum(self.obs_nll_sum) / n if n else None
+
+    @property
+    def mean_gen_nll(self) -> float | None:
+        return (self.gen_nll_sum / self.gen_nll_tokens
+                if self.gen_nll_tokens else None)
+
+    def obs_nll_curve(self) -> list[float | None]:
+        """Mean observation surprise per within-life bucket; None where the
+        agent did not live long enough to fill one."""
+        return [(sm / n if n else None)
+                for sm, n in zip(self.obs_nll_sum, self.obs_nll_tokens)]
 
     @property
     def tokens(self) -> int:

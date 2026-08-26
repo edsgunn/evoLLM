@@ -119,14 +119,74 @@ class _PreemptionWatchdog:
         pass
 
 
+# A log-probability is <= 0, and a token the model finds this unlikely is
+# indistinguishable from noise for our purposes. Anything outside the band is
+# not a logprob at all.
+_MIN_SANE_LOGPROB = -40.0
+
+
+def _flatten_prompt_logprobs(rows, prompt_ids: list[int]) -> list[float | None]:
+    """One logprob per prompt position, or None where there is not a real one.
+
+    vLLM allocates the prompt-logprob tensor for the WHOLE prompt with
+    `torch.empty` and fills only the positions it actually recomputed. With
+    prefix caching that is a small suffix, and every cached position is
+    returned as a Logprob built over uninitialised memory rather than as None.
+    Taking those at face value would attribute plausible-looking garbage to
+    real observation tokens -- numbers that would survive every sanity check
+    downstream because they look like logprobs.
+
+    Two filters, both cheap. Each row is keyed by token id, so a row whose key
+    is not the token actually at that position was never written: uninitialised
+    int32 will not match a real token id. And a value outside the plausible
+    range is rejected whatever its key says.
+    """
+    out: list[float | None] = []
+    for i, row in enumerate(rows):
+        if not row or i >= len(prompt_ids):
+            out.append(None)
+            continue
+        entry = row.get(prompt_ids[i]) if isinstance(row, dict) else None
+        lp = getattr(entry, "logprob", None)
+        if lp is None or not (_MIN_SANE_LOGPROB <= lp <= 0.0):
+            out.append(None)
+            continue
+        out.append(float(lp))
+    return out
+
+
 class VLLMTurnHandle(TurnHandle):
-    def __init__(self, engine, request_id: str, generator, turn_end_id: int):
+    def __init__(self, engine, request_id: str, generator, turn_end_id: int,
+                 prompt_ids: list[int] | None = None):
         self._engine = engine
         self.request_id = request_id
         self._gen = generator
         self._turn_end_id = turn_end_id
-        self._buffer: deque[int] = deque()
+        # (token id, logprob or None). Paired in the buffer rather than kept in
+        # two queues so a delta that carries fewer logprobs than tokens cannot
+        # silently shift surprise onto the wrong tokens.
+        self._buffer: deque[tuple[int, float | None]] = deque()
         self._finish_reason: str | None = None
+        self._prompt_logprobs: list[float | None] | None = None
+        self._prompt_ids = prompt_ids or []
+
+    @staticmethod
+    def _deltas(completion) -> list[tuple[int, float | None]]:
+        """Pair each token of a DELTA output with its own logprob.
+
+        vLLM returns logprobs as one dict per position keyed by token id. We
+        ask for the sampled token only, but the dict can still carry extra
+        entries, so look the token up by id rather than taking the first value.
+        """
+        ids = list(completion.token_ids)
+        lps = getattr(completion, "logprobs", None)
+        if not lps or len(lps) != len(ids):
+            return [(t, None) for t in ids]
+        out = []
+        for tok, row in zip(ids, lps):
+            entry = row.get(tok) if isinstance(row, dict) else None
+            out.append((tok, getattr(entry, "logprob", None)))
+        return out
 
     async def next_event(self) -> TurnToken | TurnEnded:
         while not self._buffer:
@@ -136,15 +196,23 @@ class VLLMTurnHandle(TurnHandle):
                 out = await anext(self._gen)
             except StopAsyncIteration:
                 return TurnEnded(natural=self._finish_reason == "stop")
+            if self._prompt_logprobs is None and \
+                    getattr(out, "prompt_logprobs", None):
+                self._prompt_logprobs = _flatten_prompt_logprobs(
+                    out.prompt_logprobs, self._prompt_ids)
             completion = out.outputs[0]
-            self._buffer.extend(completion.token_ids)
+            self._buffer.extend(self._deltas(completion))
             if out.finished:
                 self._finish_reason = completion.finish_reason or "stop"
-        tok = self._buffer.popleft()
+        tok, logprob = self._buffer.popleft()
         if tok == self._turn_end_id:
             # The stop token itself: the controller charges and appends it.
             return TurnEnded(natural=True)
-        return TurnToken(tok)
+        return TurnToken(tok, logprob=logprob)
+
+    def take_prompt_logprobs(self) -> list[float | None] | None:
+        out, self._prompt_logprobs = self._prompt_logprobs, None
+        return out
 
     async def abort(self) -> None:
         try:
@@ -391,6 +459,14 @@ class VLLMEngine(EngineBackend):
             max_tokens=max_tokens,
             stop_token_ids=[self.turn_end_id],
             output_kind=RequestOutputKind.DELTA,
+            # 0 means "the sampled token only" -- not "no logprobs". The
+            # log-softmax is computed for sampling regardless; this only asks
+            # for the one value back, so the cost is payload, not compute.
+            logprobs=0 if self.cfg.run.record_surprise else None,
+            # Scores the tokens the WORLD wrote into this agent's context.
+            # Only the uncached suffix is rescored, which is precisely the
+            # observations absorbed since the agent last spoke.
+            prompt_logprobs=0 if self.cfg.run.record_surprise else None,
         )
         generator = self.engine.generate(
             {"prompt_token_ids": list(context)},
@@ -399,7 +475,8 @@ class VLLMEngine(EngineBackend):
             lora_request=LoRARequest(lora_name=agent_id, lora_int_id=lora_id,
                                      lora_path=str(path)),
         )
-        return VLLMTurnHandle(self.engine, request_id, generator, self.turn_end_id)
+        return VLLMTurnHandle(self.engine, request_id, generator,
+                              self.turn_end_id, prompt_ids=list(context))
 
     # ── integrity (§4.3) ──────────────────────────────────────────────────
     def poll_preemptions(self) -> int:

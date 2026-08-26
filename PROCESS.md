@@ -59,7 +59,14 @@ headline result.
    `python -m evollm.analysis.core_metrics runs/<run> runs/<comparison>`.
    Never compute a table row in a one-off script — add the metric to
    `src/evollm/analysis/core_metrics.py` so every run's table stays comparable.
-3. **Write `NOTES.md`** from `runs/_TEMPLATE_NOTES.md`. Fill in every core
+3. **Read the traces**: `evollm inspect-traces runs/<run> --out TRACES.txt`.
+   Seconds, deterministic, no model. It is the only check that can find a
+   failure mode nobody thought of — every other metric counts turns against
+   categories chosen in advance, so a well-formed action that always fails
+   scores as healthy behaviour. Both of the worst bugs found so far had that
+   exact shape. Where a question genuinely needs a reader, `--bundle` writes a
+   stratified sample out for one; it sends nothing anywhere.
+4. **Write `NOTES.md`** from `runs/_TEMPLATE_NOTES.md`. Fill in every core
    metric, even where the answer is "not measured" — a visible gap is worth more
    than a silent one.
 3. **Compare against exactly one run**, named in the header. A run compared

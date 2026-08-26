@@ -324,6 +324,32 @@ def cmd_analyse(args) -> None:
               f"{len(result['_pheno'].columns)} traits)")
 
 
+def cmd_inspect_traces(args) -> None:
+    """Read the raw turns: what agents wrote, and what is systematically wrong
+    with how they are being prompted."""
+    from .analysis import (action_curve, build_bundle, format_inspection,
+                           format_lifecourse, inspect, surprise_curve)
+    parts = [format_inspection(inspect(args.run_dir, top=args.top))]
+    if not args.no_lifecourse:
+        parts.append(format_lifecourse(surprise_curve(args.run_dir),
+                                       action_curve(args.run_dir)))
+    text = "\n\n".join(parts)
+    print()
+    print(text)
+    if args.out:
+        Path(args.out).write_text(text + "\n")
+        print(f"\nwrote {args.out}")
+    if args.bundle:
+        # Deliberately a file, not a request. A full read of 80,000 turns is
+        # expensive, so the sample is written out to be inspected -- and paid
+        # for -- only when a question actually needs it.
+        Path(args.bundle).write_text(
+            build_bundle(args.run_dir, n=args.sample, seed=args.seed))
+        print(f"wrote {args.bundle}  ({args.sample} turns, stratified by "
+              "generation and parse outcome)\n"
+              "  Review it yourself, or pass it to a model. Nothing was sent.")
+
+
 def _print_report(run_dir: Path) -> None:
     from .report import aggregate, format_report
     print()
@@ -399,6 +425,24 @@ def main() -> None:
     p.add_argument("--out", help="also write the report to this path")
     p.add_argument("--traits-csv", help="write the per-agent trait table here")
     p.set_defaults(func=cmd_analyse)
+
+    p = sub.add_parser("inspect-traces",
+                       help="read the raw turns: prompt bugs, stuck agents, "
+                            "and within-lifetime change")
+    p.add_argument("run_dir")
+    p.add_argument("--top", type=int, default=15,
+                   help="how many repeated turns to list (default 15)")
+    p.add_argument("--no-lifecourse", action="store_true",
+                   help="skip the within-lifetime section")
+    p.add_argument("--out", help="also write the report to this path")
+    p.add_argument("--bundle", metavar="PATH",
+                   help="write a stratified sample of turns, with a review "
+                        "prompt, for a human or a model to read. Writes a "
+                        "file; sends nothing anywhere")
+    p.add_argument("--sample", type=int, default=200,
+                   help="turns in the bundle (default 200)")
+    p.add_argument("--seed", type=int, default=0)
+    p.set_defaults(func=cmd_inspect_traces)
 
     p = sub.add_parser("report", help="aggregate a run's event logs")
     p.add_argument("run_dir")
