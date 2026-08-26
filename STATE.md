@@ -169,10 +169,10 @@ Last updated: 2026-08-26.
 
 | job | what it changes | the question |
 |---|---|---|
-| `chr0025_evict` 6141384 | σ=0.0025 with `random_holder` | Does size-proportional hazard rescue the regime that has the diversity but died of bloat? This is the arm where the eviction fix has most to prove. |
-| `mlp` 6141167 | genome adapts the MLP as well as attention; capacity derived from the engine | **The first run where what the model *computes* is heritable, not just what it attends to.** Attention governs routing; the MLP is where per-position computation and the nonlinearity live. Every run so far has searched re-mixings of a fixed feature set. Does a qualitatively larger function class produce qualitatively different behaviour? |
-| `villages` 6141411 | 40 rooms of 10 agents, `say`, clustered topology | Is speech worth doing when it is affordable? Does a metapopulation let anything local emerge? |
-| `baserate` 6143004 | zero-genome agents (the frozen base model) | **Closes the largest gap.** Every comparison so far has been internal, so "takeoff" means beating a *randomly perturbed* base model rather than the model itself. |
+| `chr0025_evict` 6146539 | σ=0.0025 with `random_holder` | Does size-proportional hazard rescue the regime that has the diversity but died of bloat? This is the arm where the eviction fix has most to prove. |
+| `mlp` 6146538 | genome adapts the MLP as well as attention; capacity derived from the engine | **The first run where what the model *computes* is heritable, not just what it attends to.** Attention governs routing; the MLP is where per-position computation and the nonlinearity live. Every run so far has searched re-mixings of a fixed feature set. Does a qualitatively larger function class produce qualitatively different behaviour? |
+| `villages` 6146540 | 40 rooms of 10 agents, `say`, clustered topology | Is speech worth doing when it is affordable? Does a metapopulation let anything local emerge? |
+| `baserate` 6146533 | zero-genome agents (the frozen base model) | **Closes the largest gap.** Every comparison so far has been internal, so "takeoff" means beating a *randomly perturbed* base model rather than the model itself. |
 | `braced` 6143016 | prompt slots written `{room}` not `room_id` | Is the degenerate placeholder action a prompt-design artefact, or are agents reaching for *any* cheap always-failing action? |
 
 Each config states its own expected outcome and what would falsify it, in the
@@ -229,24 +229,34 @@ show.
 - **Most moves fail.** 98,471 failed against 81,532 succeeded in the reference
   run — 55% of attempts. — *established* — same
 
-### What the running arms will now also report
+### Surprise recording: works, and costs 2.4x throughput
 
-All four queued arms (`mlp` 6141167, `chr0025_evict` 6141384, `villages`
-6141411, `braced` 6143016) now record **observation surprise** and trace whole
-lives of a sampled tenth of agents. This measures the project's hypothesis
-under four treatments at once instead of in a dedicated arm.
+**It works.** The startup probe passed on every engine of every job, every
+death event carried surprise, and ~80% carried a multi-bucket within-life
+curve. Observation surprise (0.516) runs about **six times** the agent's
+surprise at its own output (0.086), which is why scoring only the tokens the
+world wrote was the right call: a whole-context average would have measured
+near-deterministic self-prediction. — *established* —
+`archive/2026-08_surprise_overhead/README.md`
 
-The GPU path is unproven, so the engine **probes it at startup and disables
-surprise rather than the run** if it fails — check each job's log for
-`surprise recording active` or `surprise recording DISABLED`. If it disables
-everywhere, `configs/node_4room_7b_surprise.yaml` is the clean fallback arm.
-Watch step rate against 6127798 early: the overhead should be a logits matmul
-over a few dozen positions per turn, and if it is more than that these four
-arms are confounded with it.
+**It costs about 2.4x throughput** — 0.7 steps/sec against the reference run's
+1.7, at matched context and matched population, flat across context. Twelve
+hours therefore buys roughly 40% of the usual depth. The predicted cost was a
+logits matmul over the uncached prompt suffix; what was missed is that vLLM
+allocates and pythonizes the prompt-logprob tensor across the *whole* prompt
+every turn. — *established* — same
+
+Consequence: surprise now runs on **`braced` only** (6143016), whose question
+is settled in the first few thousand steps. `mlp`, `chr0025_evict` and
+`villages` were cancelled 2.7h in and resubmitted without it, because all three
+are decided by depth. Whole-life tracing was kept everywhere; it is free.
 
 ### Holes in what we have already run
 
-- ~~**We have never measured the base model.**~~ Being measured now (6143004).
+- **We have never measured the base model.** The first attempt (6143004)
+  produced no data: a four-room config was submitted to a one-GPU precheck, the
+  second room's engine asked NVML for an unallocated device, and the job then
+  sat to its four-hour limit. Retrying as 6146533 with four GPUs.
   Until it reports, every "takeoff" claim means beating a *randomly perturbed*
   base model, not the model itself.
 - **The critical mutation rate is bracketed between 0.001 and 0.0025 and has

@@ -252,11 +252,14 @@ run:
   # questions could not be asked of it. Same volume, whole lives, spread over
   # the run.
   trace_agent_fraction: 0.10
-  # Score the tokens the WORLD writes into each agent's context, bucketed by
-  # position in the agent's own life. Enabled across the queued arms so
-  # surprise is measured under four different treatments at once rather than
-  # in one dedicated arm. The GPU path is unproven, so the engine probes it at
-  # startup and disables surprise -- not the run -- if it does not work.
-  record_surprise: true
+  # Surprise recording is OFF here, and this is a measured decision rather than
+  # an oversight. It works -- the probe passed on every engine and every death
+  # carried a within-life curve -- but it costs about 2.4x throughput: 0.7
+  # steps/sec against the reference run's 1.7 at matched context and matched
+  # population. That would leave this arm at roughly 40% of its usual depth,
+  # and this arm's question is decided by depth. Surprise is measured on the
+  # `braced` arm instead, whose question is settled in the first few thousand
+  # steps.
+  record_surprise: false
   context_snapshot_every_steps: 25000
   context_snapshot_agents: 3

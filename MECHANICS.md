@@ -76,21 +76,6 @@ An agent holds blocks for two things:
 The pool is the whole of physics. Nothing else is scarce, and no other cost
 exists.
 
-### The clock
-
-World time is measured in **tokens, not seconds**. Every living agent advances
-exactly one token per world step: one token of an action it is generating, or
-one token of an observation it is absorbing. Nothing in the world refers to
-wall-clock time, and an agent that is expensive to compute does not thereby get
-less world time than a cheap one.
-
-This matters more than it sounds. It means a long-lived agent with a huge
-context is *slower in seconds* but not *slower in the world*, so the physics
-stays clean while the wall-clock cost of a run varies.
-
-An agent's **age** is its own token count, so it survives migration between
-rooms that have run at different rates.
-
 ---
 
 ## 3. What an agent is

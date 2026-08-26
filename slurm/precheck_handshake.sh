@@ -6,7 +6,13 @@
 
 #SBATCH --job-name=evollm_precheck
 #SBATCH --nodes=1
-#SBATCH --gpus=1
+# Four GPUs, matching slurm/run_experiment.sh. The base rate is only
+# interpretable against a main run, so it must be measurable under the SAME
+# world -- and the reference config declares one room per GPU. Requesting one
+# GPU for a four-room config cost a whole 4-hour allocation: room gpu0 built
+# fine, gpu1 asked NVML for a device that was not allocated, and the engine
+# core died 31 seconds in while the job sat to its time limit.
+#SBATCH --gpus=4
 #SBATCH --cpus-per-gpu=8
 #SBATCH --time=04:00:00
 #SBATCH --partition=workq

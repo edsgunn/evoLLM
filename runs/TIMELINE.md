@@ -157,3 +157,30 @@ Surprise instrumented for the first time, and the traces read for the first time
 - **Tracing changed**: whole lives of a random tenth of agents instead of the first N turns a room produces. The old budget filled up in the opening of the run, so every traced life was a founder's prefix — which is why within-lifetime questions could not be asked of any previous run.
 - **`evollm inspect-traces`** reads the raw turns. On the existing runs it found, in every one: communication has collapsed (`tell` is 0.3-2% of actions; 1,000 tells against 173,988 mate requests in the reference run), a quarter to a third of agents emit one identical turn for 80%+ of their life while scoring as canonical throughout, and the placeholder tic reaches `mate` as well as `go`.
 - **Within-lifetime change measured** on every past run via the behavioural proxy: no improvement anywhere, and a significant decline in the reference run (−0.74 pp ± 0.41 canonical rate, paired, n=2,445).
+
+## 2026-08-26 (evening)
+
+Two failures and one measurement.
+
+- **`baserate` 6143004 produced no data.** A four-room config was submitted to
+  `precheck_handshake.sh`, which requests one GPU. Room `gpu0`'s engine built
+  fine; `gpu1`'s asked NVML for physical device 1, which was not allocated, and
+  the engine core died 31 seconds in. The job then **hung for 3h59m** until the
+  time limit — four GPU-hours spent on a run that was already dead. The script
+  now requests four GPUs; resubmitted as **6146533**. An engine-start failure
+  still does not terminate the job, which remains unfixed.
+- **Surprise recording works.** Probe passed on every engine of all four arms;
+  every death carried surprise, ~80% with a multi-bucket within-life curve.
+  Observation surprise (0.516) is ~6x the agent's surprise at its own output
+  (0.086) — the gap that justifies scoring only what the world wrote.
+- **Surprise costs ~2.4x throughput.** 0.7 steps/sec against the reference
+  run's 1.7 at matched context and matched population, flat across context.
+  Twelve hours buys ~40% of the usual depth. The overhead is vLLM allocating
+  and pythonizing the prompt-logprob tensor across the whole prompt each turn,
+  not the logits matmul that was predicted.
+- **Three arms restarted without it.** `mlp`, `chr0025_evict` and `villages`
+  cancelled 2.7h in and resubmitted as **6146538**, **6146539**, **6146540** —
+  all three are decided by depth. `braced` (6143016) keeps surprise and carries
+  the measurement. Partial directories kept in
+  `archive/2026-08_surprise_overhead/` as the evidence for the cost.
+
