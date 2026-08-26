@@ -151,10 +151,22 @@ class BlockPool:
                 self.holdings.pop(agent_id, None)
 
     # ── eviction (§2.5) ───────────────────────────────────────────────────
-    def random_holder(self, rng: np.random.Generator) -> str | None:
+    def random_holder(self, rng: np.random.Generator,
+                      eligible: set[str] | None = None) -> str | None:
         """Pick a victim with probability proportional to blocks held —
-        i.e. choose a random held block and return its owner. Content-blind."""
-        ids = [a for a, h in self.holdings.items() if h.total > 0]
+        i.e. choose a random held block and return its owner. Content-blind.
+
+        `eligible` restricts the draw to agents the caller can actually kill.
+        Not every holder is one: a newborn holds its adapter while still in
+        `_pending_arrivals`, and a migrant holds its full footprint at the
+        destination before the source has released it (§4.5). Both are in the
+        ledger and neither is in `self.agents`, so drawing them raised a
+        KeyError that killed two runs the first time this policy was ever
+        used. Their blocks still count toward what fills the room — they are
+        genuinely allocated — they just cannot be the ones to die.
+        """
+        ids = [a for a, h in self.holdings.items()
+               if h.total > 0 and (eligible is None or a in eligible)]
         if not ids:
             return None
         weights = np.array([self.holdings[a].total for a in ids], dtype=np.float64)

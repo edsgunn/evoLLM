@@ -79,6 +79,11 @@ class EngineBackend(ABC):
         return 0."""
         return 0
 
+    def device_memory(self) -> dict | None:
+        """Bytes actually in use on the room's device, or None if unknown.
+        Backends without a GPU return None."""
+        return None
+
     def pool_blocks(self) -> int | None:
         """Physical KV blocks the engine actually has, or None if unknown.
 

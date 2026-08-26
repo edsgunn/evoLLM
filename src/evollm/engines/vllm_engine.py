@@ -286,6 +286,35 @@ class VLLMEngine(EngineBackend):
     def pool_blocks(self) -> int | None:
         return self._num_gpu_blocks
 
+    def device_memory(self) -> dict | None:
+        """Actual bytes in use on this room's GPU, from NVML.
+
+        The block economy accounts for KV and adapters; the device also carries
+        the model weights, the CUDA context, cuBLAS workspaces, captured CUDA
+        graphs, activation buffers and fragmentation. None of that is in the
+        ledger, which is why capacity has to be set against a measured number
+        rather than a computed one.
+
+        NVML is used rather than torch.cuda because it needs no CUDA context in
+        this process: the engine runs in its own subprocess, and initialising a
+        context here purely to ask a question would itself consume a few
+        hundred MB of what we are trying to measure.
+        """
+        if self.room.gpu is None:
+            return None
+        try:
+            import pynvml
+            if not getattr(self, "_nvml_ready", False):
+                pynvml.nvmlInit()
+                self._nvml_ready = True
+            h = pynvml.nvmlDeviceGetHandleByIndex(self.room.gpu)
+            info = pynvml.nvmlDeviceGetMemoryInfo(h)
+            return {"used_mb": int(info.used) // 2**20,
+                    "free_mb": int(info.free) // 2**20,
+                    "total_mb": int(info.total) // 2**20}
+        except Exception:
+            return None
+
     def capacity_blocks(self) -> int | None:
         """Authoritative pool size for the room.
 

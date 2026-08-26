@@ -358,12 +358,75 @@ def resolve_max_model_len(cfg: "Config", adapter_blocks: int) -> int:
         return int(cfg.model.max_model_len)
     capacities = [r.capacity_blocks for r in cfg.world.rooms]
     if any(c is None for c in capacities):
-        raise ValueError(
-            'model.max_model_len: "auto" requires every room to set '
-            "capacity_blocks explicitly, since the ceiling is derived from "
-            "the pool an agent could hold")
+        # Rooms that take their capacity from the engine create a circularity:
+        # capacity comes from the engine's pool, but the engine needs
+        # max_model_len before it can be built. Broken with an UPPER BOUND on
+        # the pool, computed from device memory without starting anything. The
+        # real pool is always smaller (the weights come out of the same
+        # budget), so the ceiling derived here can never bind — which is the
+        # point: scarcity, not the context window, decides who dies.
+        bound = _pool_upper_bound(cfg)
+        if bound is None:
+            raise ValueError(
+                'model.max_model_len: "auto" needs either explicit '
+                "capacity_blocks on every room, or a visible CUDA device to "
+                "size the ceiling from")
+        return (bound - adapter_blocks) * block_size + 1
     # +1 because vLLM needs the prompt plus at least one output token to fit.
     return (max(capacities) - adapter_blocks) * block_size + 1
+
+
+def _pool_upper_bound(cfg: "Config") -> int | None:
+    """Most KV blocks the engine could possibly hold on one device.
+
+    Erring low is safe: capacity clamps and the context window comes back into
+    play. Erring HIGH is fatal, which an earlier version of this got wrong. It
+    ignored the model weights on the reasoning that overshooting only wasted
+    rope-cache memory. It does not: vLLM refuses to start unless a single
+    request of max_model_len fits in the KV cache, so a bound that is too
+    generous kills the engine at init:
+
+        ValueError: To serve at least one request with the model's max seq len
+        (1645057), 87.86 GiB KV cache is needed, which is larger than the
+        available KV cache memory (71.03 GiB)
+
+    So the weights are subtracted, and a further reserve for activations,
+    captured CUDA graphs and fragmentation, all of which come out of the same
+    utilisation budget.
+    """
+    try:
+        import pynvml
+        from transformers import AutoConfig
+        pynvml.nvmlInit()
+        h = pynvml.nvmlDeviceGetHandleByIndex(0)
+        total = int(pynvml.nvmlDeviceGetMemoryInfo(h).total)
+    except Exception:
+        return None
+    hf = AutoConfig.from_pretrained(cfg.model.name)
+    layers = hf.num_hidden_layers
+    n_kv = getattr(hf, "num_key_value_heads", hf.num_attention_heads)
+    n_heads = hf.num_attention_heads
+    head_dim = getattr(hf, "head_dim", None) or hf.hidden_size // n_heads
+    dtype_bytes = 2                       # bfloat16 / fp16
+    block_bytes = (cfg.world.block_size * 2 * layers * n_kv * head_dim
+                   * dtype_bytes)
+
+    hidden, vocab = hf.hidden_size, hf.vocab_size
+    inter = getattr(hf, "intermediate_size", 4 * hidden)
+    per_layer = (hidden * n_heads * head_dim          # q
+                 + 2 * hidden * n_kv * head_dim       # k, v
+                 + n_heads * head_dim * hidden        # o
+                 + 3 * hidden * inter)                # gate, up, down
+    params = vocab * hidden + layers * per_layer
+    if not getattr(hf, "tie_word_embeddings", False):
+        params += vocab * hidden                      # lm_head
+    weight_bytes = params * dtype_bytes
+    RESERVE = 3 * 1024 ** 3       # activations, CUDA graphs, fragmentation
+
+    budget = cfg.engine.gpu_memory_utilization * total - weight_bytes - RESERVE
+    if budget <= 0:
+        return None
+    return int(budget / block_bytes)
 
 
 def _build(cls, data: dict) -> Any:

@@ -417,3 +417,149 @@ async def test_parental_investment_end_to_end(tmp_cfg):
     # accounting invariant: the pool never exceeds capacity
     assert c.pool.used <= c.pool.capacity
     assert sum(h.total for h in c.pool.holdings.values()) == c.pool.used
+
+
+# ── eviction must only ever pick an agent the controller can kill ─────────
+def test_random_holder_respects_the_eligible_set():
+    """Not every holder is killable: a newborn holds its adapter while still
+    in _pending_arrivals, and a migrant holds its footprint at the destination
+    before the source releases it. Both are in the ledger, neither is in
+    self.agents."""
+    import numpy as np
+    from evollm.blocks import BlockPool
+    p = BlockPool(capacity=1000, block_size=16)
+    p.try_reserve_adapter("live", 10)
+    p.try_reserve_adapter("newborn_in_flight", 500)   # far more blocks
+    rng = np.random.default_rng(0)
+    picks = {p.random_holder(rng, eligible={"live"}) for _ in range(200)}
+    assert picks == {"live"}, picks
+    # with nobody eligible the pool says so rather than offering a phantom
+    assert p.random_holder(rng, eligible=set()) is None
+    # unrestricted, it will happily return the unkillable one
+    assert "newborn_in_flight" in {p.random_holder(rng) for _ in range(200)}
+
+
+async def test_eviction_never_targets_an_agent_not_in_the_room(tmp_cfg):
+    """Regression: `self.agents[victim_id]` raised KeyError and killed two
+    12-hour jobs the first time random_holder was ever used in anger."""
+    cfg = tmp_cfg(capacity=400, pop=3)
+    cfg.world.eviction = "random_holder"
+    world = make_world(cfg)
+    await world.seed()
+    c = world.controllers["r0"]
+    # a holder the controller cannot kill, exactly like a pending arrival,
+    # and big enough that an unrestricted draw would almost always pick it
+    assert c.pool.try_reserve_adapter("phantom", c.pool.free - 20)
+    agent = next(iter(c.agents.values()))
+    for _ in range(500):                       # must force the pool empty
+        if not c._append_token(agent, 7):
+            break                              # died of scarcity: fine
+    assert "phantom" in c.pool.holdings, "the phantom must never be evicted"
+    assert c.pool.used <= c.pool.capacity
+
+
+async def test_eviction_falls_back_to_the_requester_when_nobody_else_can_die(tmp_cfg):
+    """If every other holder is in flight, scarcity falls on the requester —
+    the same outcome the `requester` policy gives."""
+    cfg = tmp_cfg(capacity=300, pop=1)
+    cfg.world.eviction = "random_holder"
+    world = make_world(cfg)
+    await world.seed()
+    c = world.controllers["r0"]
+    agent = next(iter(c.agents.values()))
+    c.pool.try_reserve_adapter("phantom", c.pool.free - 5)
+    died = False
+    for _ in range(400):
+        if not c._append_token(agent, 7):
+            died = True
+            break
+    assert died, "the requester should have died once the pool was full"
+    assert agent.id not in c.agents
+
+
+# ── capacity should come from the engine, not from a hand-set number ──────
+def test_auto_ceiling_uses_explicit_capacity_when_rooms_set_it(tmp_cfg):
+    """Unchanged path: a room that names its capacity still sizes the ceiling
+    from what a lone survivor could hold."""
+    from evollm.config import resolve_max_model_len
+    cfg = tmp_cfg(capacity=5000)
+    cfg.model.max_model_len = "auto"
+    assert resolve_max_model_len(cfg, adapter_blocks=10) == \
+        (5000 - 10) * cfg.world.block_size + 1
+
+
+def test_auto_ceiling_falls_back_to_a_device_bound_when_capacity_is_derived(tmp_cfg,
+                                                                           monkeypatch):
+    """A room that leaves capacity to the engine creates a circularity —
+    capacity needs the engine, the engine needs max_model_len. The ceiling is
+    then sized from an upper bound on the pool instead."""
+    from evollm import config as cfgmod
+    cfg = tmp_cfg(capacity=None)
+    cfg.model.max_model_len = "auto"
+    monkeypatch.setattr(cfgmod, "_pool_upper_bound", lambda c: 100_000)
+    got = cfgmod.resolve_max_model_len(cfg, adapter_blocks=88)
+    assert got == (100_000 - 88) * cfg.world.block_size + 1
+    # and the bound must exceed any real pool, so the ceiling cannot bind
+    assert got > (83_744 - 88) * cfg.world.block_size
+
+
+def test_auto_ceiling_raises_when_it_can_neither_derive_nor_measure(tmp_cfg,
+                                                                    monkeypatch):
+    from evollm import config as cfgmod
+    cfg = tmp_cfg(capacity=None)
+    cfg.model.max_model_len = "auto"
+    monkeypatch.setattr(cfgmod, "_pool_upper_bound", lambda c: None)
+    with pytest.raises(ValueError, match="capacity_blocks"):
+        cfgmod.resolve_max_model_len(cfg, adapter_blocks=22)
+
+
+def test_pool_bound_subtracts_the_model_weights(monkeypatch, tmp_cfg):
+    """Regression: the bound once ignored the weights, on the reasoning that
+    overshooting only wasted rope-cache memory. vLLM instead refuses to start
+    unless one max_model_len request fits in the KV cache, so the too-generous
+    bound killed the engine at init and burned a queue slot."""
+    from evollm import config as cfgmod
+
+    class _HF:
+        num_hidden_layers = 28
+        num_attention_heads = 28
+        num_key_value_heads = 4
+        head_dim = 128
+        hidden_size = 3584
+        vocab_size = 152064
+        intermediate_size = 18944
+        tie_word_embeddings = False
+
+    total = 97871 * 2 ** 20                       # a 96 GB card, as measured
+    monkeypatch.setattr(cfgmod, "AutoConfig", None, raising=False)
+
+    class _NVML:
+        @staticmethod
+        def nvmlInit(): pass
+        @staticmethod
+        def nvmlDeviceGetHandleByIndex(i): return object()
+        @staticmethod
+        def nvmlDeviceGetMemoryInfo(h):
+            return type("m", (), {"total": total})()
+
+    import sys, types
+    fake_nvml = types.ModuleType("pynvml")
+    for n in ("nvmlInit", "nvmlDeviceGetHandleByIndex", "nvmlDeviceGetMemoryInfo"):
+        setattr(fake_nvml, n, getattr(_NVML, n))
+    fake_tf = types.ModuleType("transformers")
+    fake_tf.AutoConfig = type("AC", (), {"from_pretrained": staticmethod(lambda n: _HF())})
+    monkeypatch.setitem(sys.modules, "pynvml", fake_nvml)
+    monkeypatch.setitem(sys.modules, "transformers", fake_tf)
+
+    cfg = tmp_cfg(capacity=None)
+    cfg.engine.gpu_memory_utilization = 0.92
+    cfg.world.block_size = 16
+    bound = cfgmod._pool_upper_bound(cfg)
+
+    # vLLM measured 71.03 GiB of usable KV on this card; the bound must sit
+    # under that, not above it
+    block_bytes = 16 * 2 * 28 * 4 * 128 * 2
+    assert bound * block_bytes < 71.03 * 2 ** 30, \
+        f"bound of {bound} blocks exceeds the pool vLLM can actually build"
+    # and it must still be generous enough to beat a hand-set 48,000
+    assert bound > 48_000

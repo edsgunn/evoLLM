@@ -650,8 +650,12 @@ class RoomController:
                 self._kill(agent, DEATH_POOL_EXHAUSTED)
                 return False
             assert self.cfg.world.eviction == EVICT_RANDOM_HOLDER
-            victim_id = self.pool.random_holder(self.rng)
+            killable = {a for a in self.agents if a not in self._died_this_step}
+            victim_id = self.pool.random_holder(self.rng, eligible=killable)
             if victim_id is None or victim_id == agent.id:
+                # Nobody else can be evicted — every other holder is a newborn
+                # or a migrant still in flight — so scarcity falls on the
+                # requester, as it does under the `requester` policy.
                 self._kill(agent, DEATH_POOL_EXHAUSTED)
                 return False
             self._kill(self.agents[victim_id], DEATH_EVICTED)
@@ -805,7 +809,13 @@ class RoomController:
                       generations=sorted({a.generation for a in self.agents.values()}),
                       descended=sum(1 for a in self.agents.values()
                                     if a.origin == 'birth'),
-                      refills_so_far=self.refills)
+                      refills_so_far=self.refills,
+                      # Device-level truth. The economy knows KV and adapters;
+                      # the GPU also carries weights, CUDA context, cuBLAS
+                      # workspaces, captured graphs and fragmentation, none of
+                      # which are in the ledger. Capacity has to be set against
+                      # what is measured here, not against what we compute.
+                      **(self.engine.device_memory() or {}))
 
     def _turn_budget(self, agent: Agent) -> int:
         """How many tokens this turn may generate before the engine must stop.
