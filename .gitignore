@@ -2,8 +2,15 @@ __pycache__/
 *.pyc
 .venv/
 uv.lock
-runs/
-archive/
+# Run and archive data are not tracked, but their write-ups are: NOTES.md,
+# TIMELINE.md and the archive READMEs are the project's record of what each
+# run meant, and PROCESS.md treats them as canonical.
+runs/**
+archive/**
+!runs/**/
+!archive/**/
+!runs/**/*.md
+!archive/**/*.md
 slurm_logs/
 .pytest_cache/
 *.egg-info/
