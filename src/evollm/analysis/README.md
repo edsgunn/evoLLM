@@ -1,5 +1,8 @@
 # `evollm.analysis` — population analysis
 
+> This file documents the **machinery**. What each metric *means*, why it is the
+> right thing to measure, and how it has misled us is in **`metrics/`**.
+
 Reusable machinery for asking the same questions of any run, the same way.
 The unit is **one row per agent**; every module hands its output to the next.
 
