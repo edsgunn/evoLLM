@@ -13,19 +13,20 @@ how to run them, and how the research process works.
 
 ## How things work around here
 
-Four documents, each with one job. Keeping them separate is what stops the
+Five documents, each with one job. Keeping them separate is what stops the
 project going stale, so it is worth knowing which is which before you edit any
 of them.
 
 | document | answers | changes |
 |---|---|---|
 | [`VISION.md`](VISION.md) | **Why.** What we are trying to produce, the questions Q1–Q8, the phase plan and its exit criteria. | rarely |
+| [`MECHANICS.md`](MECHANICS.md) | **What actually happens.** The world, perception, action, reproduction, death — in prose, no code. Start here if the project is new to you. | when the world changes |
 | [`STATE.md`](STATE.md) | **What we believe now.** Every finding, graded by confidence, with a citation. What is running. What we are blind to. | every run |
 | [`PROCESS.md`](PROCESS.md) | **How we work.** The loop below, in detail, with the checklists. | rarely |
 | `README.md` | **Where things are.** This file. | with the code |
 
 The rule that keeps them from collapsing into each other: **no beliefs in
-`VISION.md`, no vision in `STATE.md`.** A finding goes in `STATE.md` with a
+`VISION.md`, no vision in `STATE.md`, and no findings in `MECHANICS.md`.** A finding goes in `STATE.md` with a
 pointer to the run that established it; the reason anyone cares goes in
 `VISION.md`.
 
@@ -68,7 +69,8 @@ later run overturns it.
 ## Layout
 
 ```
-VISION.md  STATE.md  PROCESS.md      the three documents above
+VISION.md  MECHANICS.md            the documents described above
+STATE.md   PROCESS.md
 
 src/evollm/
   config.py        YAML experiment config; every knob, with why it exists
@@ -262,6 +264,7 @@ They are historical. Where they conflict with `VISION.md`, `VISION.md` wins.
 
 ## Where to start
 
+- **I have never seen this project before.** → [`MECHANICS.md`](MECHANICS.md)
 - **Why does this project exist?** → [`VISION.md`](VISION.md)
 - **What do we currently believe, and what is running?** → [`STATE.md`](STATE.md)
 - **I want to add a run.** → [`PROCESS.md`](PROCESS.md), then write the config
