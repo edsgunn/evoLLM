@@ -1,5 +1,8 @@
-# STATUS: queued as Slurm job 6081313 (submitted 2026-08-21).
-# Lower bracket of the sigma sweep.
+# STATUS: CLOSED — ran as job 6081313. Superseded as the reference by
+# `chr001_evict` (6127798), the same configuration with random_holder
+# eviction. Still the reference for what sigma = 0.001 does under the
+# original eviction rule. See runs/node_4room_7b_chr001_6081313/NOTES.md.
+#
 #
 # sigma sweep on the chromosomal substrate. Chromosomal crossover is now the
 # default everywhere: it is the only scheme measured to transmit anything

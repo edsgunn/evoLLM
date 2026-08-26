@@ -1,3 +1,8 @@
+# STATUS: RUNNING as job 6143016 (submitted 2026-08-26).
+# Also the only arm currently recording surprise: it costs ~2.4x throughput,
+# and this arm's question is settled in the first few thousand steps, so it
+# is the one that can afford the depth. See STATE.md.
+#
 # THE PLACEHOLDER FIX. chr001_evict (the reference configuration) with one
 # field changed: how the prompt writes its argument slots.
 #

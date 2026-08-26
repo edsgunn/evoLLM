@@ -17,7 +17,7 @@ the project goes stale.
 | **`runs/<run>/ANALYSIS.txt`** | Machine output from `evollm analyse`. Never hand-edited. | generated |
 | **`src/evollm/analysis/metrics/*.md`** | Theory. What a metric means, why we measure it, how it misleads. Independent of code. | when understanding changes, not when data does |
 | **`src/evollm/analysis/README.md`** | The machinery. How to compute things and what the functions guard against. | when code changes |
-| **`runs/README.md`** | Per-run index. | when a run is added |
+| **`runs/README.md`** | Per-run index: a **map** of what exists and where. Holds no beliefs — it restated conclusions once and they went stale, then wrong. | when a run is added or archived |
 | **`archive/*/README.md`** | Why some runs cannot be cited. | when a run is invalidated |
 | **`configs/*.yaml` headers** | What a run is FOR and what would falsify it — written *before* it runs. | at submission |
 
@@ -69,14 +69,26 @@ headline result.
 4. **Write `NOTES.md`** from `runs/_TEMPLATE_NOTES.md`. Fill in every core
    metric, even where the answer is "not measured" — a visible gap is worth more
    than a silent one.
-3. **Compare against exactly one run**, named in the header. A run compared
+5. **Compare against exactly one run**, named in the header. A run compared
    against nothing establishes nothing.
-4. **Move it out of *Currently running*** in both `STATE.md` and
+6. **Move it out of *Currently running*** in both `STATE.md` and
    `TIMELINE.md`, into the timeline under the day it ended.
-5. **Fold what it establishes into `STATE.md`**, with confidence set by what the
+7. **Fold what it establishes into `STATE.md`**, with confidence set by what the
    run actually showed — not by what it was hoping to show.
-6. **If it is invalid or truncated**, move it to `archive/` with a README saying
+8. **Add it to the index** in `runs/README.md`, and give its config a
+   `STATUS:` line saying what became of it. A config left reading
+   "queued as job X" long after that job finished is how a finished arm gets
+   resubmitted by accident.
+9. **If it is invalid or truncated**, move it to `archive/` with a README saying
    why. Never delete a run.
+
+   **A job that produced no data at all still gets an archive entry** — a
+   directory containing only a README. There is nothing to move, but the
+   failure must be findable rather than being a silent gap between job ids, and
+   the question it was meant to answer has to be visibly reopened. The reasons
+   a job produces nothing are environmental, and they recur:
+   `archive/2026-08_baserate_no_data/` is a submission error that cost four
+   GPU-hours, and would have cost them again unnoticed.
 
 ---
 
@@ -133,8 +145,14 @@ Check these when updating `STATE.md`:
 - [ ] Confidence levels still match the evidence — a *likely* that has since been
       replicated should be promoted; one contradicted should be demoted or cut.
 - [ ] *Holes in what we have already run* reflects what has actually been run.
-- [ ] Superseded configs carry a `STATUS: SUPERSEDED` header so nobody
-      resubmits them by accident.
+- [ ] Every config's `STATUS:` matches what actually became of that job —
+      `SUPERSEDED`/`CLOSED` for finished arms, the current job id for running
+      ones. A stale "queued as job X" is worse than no header at all.
+- [ ] Every finished run appears in `runs/README.md`, and every archive
+      directory is listed there with the reason its runs cannot be cited.
+- [ ] `runs/README.md` still states no beliefs. If it has started explaining
+      what a run *showed*, that belongs in the run's `NOTES.md` and in
+      `STATE.md`.
 - [ ] Metric documents match how the metrics are actually being computed.
 
 ## When a belief turns out to be wrong

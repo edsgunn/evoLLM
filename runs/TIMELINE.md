@@ -183,4 +183,13 @@ Two failures and one measurement.
   all three are decided by depth. `braced` (6143016) keeps surprise and carries
   the measurement. Partial directories kept in
   `archive/2026-08_surprise_overhead/` as the evidence for the cost.
+- **Documentation audit against `PROCESS.md`.** Five configs still read "queued
+  as Slurm job 6081xxx" for arms that finished on 2026-08-22 — the state that
+  gets a finished arm resubmitted by accident; all now carry `CLOSED` with what
+  they settled. The four live arms had no `STATUS` at all and now name their job
+  ids. `runs/README.md` was restating conclusions and had gone wrong — it still
+  asserted σ = 0.0025 sits below the error threshold, months after `chr0025`
+  collapsed — and is now a map with no beliefs in it. `baserate` 6143004 got an
+  archive entry despite having produced no data, because a job that fails
+  before writing anything otherwise leaves only a gap between job ids.
 

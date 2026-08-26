@@ -1,5 +1,9 @@
-# STATUS: queued as Slurm job 6081314 (submitted 2026-08-21).
-# Linkage-dial probe. Read against chr0025 (c=3) and uni0025 (c=112, i.e. uniform).
+# STATUS: CLOSED — ran as job 6081314. One chromosome is too few: it loses
+# diversity faster and further than any other surviving arm. The
+# chromosome-count question should be re-asked at sigma = 0.001, where the
+# population does not die anyway.
+# See runs/node_4room_7b_chr0025_c1_6081314/NOTES.md.
+#
 #
 # sigma sweep on the chromosomal substrate. Chromosomal crossover is now the
 # default everywhere: it is the only scheme measured to transmit anything

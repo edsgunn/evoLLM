@@ -1,3 +1,8 @@
+# STATUS: RUNNING as job 6146539 (submitted 2026-08-26).
+# An earlier attempt (6141384) was cancelled 2.7h in and is archived under
+# archive/2026-08_surprise_overhead/. This arm needs depth above all: the
+# collapse it exists to prevent only appeared past step 80,000.
+#
 # DOES SIZE-PROPORTIONAL HAZARD RESCUE sigma = 0.0025?
 #
 # chr0025 (6081311) with one word changed: the eviction policy.

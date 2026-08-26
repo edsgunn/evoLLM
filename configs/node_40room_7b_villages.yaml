@@ -1,3 +1,7 @@
+# STATUS: RUNNING as job 6146540 (submitted 2026-08-26).
+# An earlier attempt (6141411) was cancelled 2.7h in and is archived under
+# archive/2026-08_surprise_overhead/.
+#
 # VILLAGES. Forty rooms of ten agents instead of four rooms of seventy.
 #
 # Ten virtual rooms per GPU, fully connected inside a device; the four devices

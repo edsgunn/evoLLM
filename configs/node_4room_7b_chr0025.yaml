@@ -1,5 +1,8 @@
-# STATUS: queued as Slurm job 6081311 (submitted 2026-08-21).
-# Read against uni0025 (6081397) for the crossover question, and against chr005/chr001 for the sigma sweep.
+# STATUS: CLOSED — ran as job 6081311, and died of bloat collapse: births
+# reached zero by step 80,000 and never recovered. Superseded by
+# chr0025_evict, the same configuration with random_holder eviction, which
+# targets exactly that. See runs/node_4room_7b_chr0025_6081311/NOTES.md.
+#
 #
 # sigma sweep on the chromosomal substrate. Chromosomal crossover is now the
 # default everywhere: it is the only scheme measured to transmit anything

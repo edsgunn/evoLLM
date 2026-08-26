@@ -1,3 +1,8 @@
+# STATUS: RUNNING as job 6146538 (submitted 2026-08-26).
+# An earlier attempt (6141167) was cancelled 2.7h in and is archived under
+# archive/2026-08_surprise_overhead/ — it carried surprise recording, which
+# costs ~2.4x throughput, and this arm is decided by generation depth.
+#
 # MLP GENOME. chr001_evict (sigma = 0.001, chromosomal c=3, random_holder,
 # refill off) with two changes: the genome now adapts the MLP as well as
 # attention, and room capacity is taken from the engine instead of being

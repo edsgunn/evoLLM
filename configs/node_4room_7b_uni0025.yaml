@@ -1,5 +1,8 @@
-# STATUS: queued as Slurm job 6081397 (submitted 2026-08-21).
-# The control for chr0025 (6081311). Identical to it except crossover; diff the two files to confirm.
+# STATUS: CLOSED — ran as job 6081397 as the crossover control. It settled
+# the question: chromosomal transmits phenotype more faithfully. The scheme
+# this config tests is no longer the default.
+# See runs/node_4room_7b_uni0025_6081397/NOTES.md.
+#
 #
 # THE CROSSOVER CONTROL. Uniform crossover at sigma = 0.0025, identical to
 # chr0025 in every other respect, so that the pair differs in exactly one

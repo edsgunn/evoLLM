@@ -1,5 +1,8 @@
-# STATUS: queued as Slurm job 6081312 (submitted 2026-08-21).
-# Upper bracket of the sigma sweep.
+# STATUS: CLOSED — ran as job 6081312 and confirmed sigma = 0.005 is above
+# the critical mutation rate. Superseded as the boundary estimate: the
+# bracket later moved down to (0.001, 0.0025).
+# See runs/node_4room_7b_chr005_6081312/NOTES.md.
+#
 #
 # sigma sweep on the chromosomal substrate. Chromosomal crossover is now the
 # default everywhere: it is the only scheme measured to transmit anything
