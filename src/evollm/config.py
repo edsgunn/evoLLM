@@ -326,11 +326,52 @@ class Config:
     def room_ids(self) -> list[str]:
         return [r.id for r in self.world.rooms]
 
+    def _clustered_adjacency(self) -> dict[str, list[str]]:
+        """Complete within a device, sparse between devices.
+
+        Every run so far has been panmictic — 1.04-1.47 EFFECTIVE lineages and
+        95-99.5% of agents in a single family — because one big room per GPU
+        under `edges: complete` mixes everything. Nothing could diverge, so
+        founder labels carried no information and no niche ever formed.
+
+        This makes each device a cluster of small, fully-connected rooms, and
+        joins the devices in a ring. Migration within a cluster is easy and
+        migration between clusters has to pass through a single room, which is
+        isolation by distance: the structure a metapopulation needs before
+        lineages can differentiate at all.
+
+        A ring rather than a denser graph deliberately. `go` is the only
+        migration channel and it succeeds 65-70% of the time, so migration is
+        already generous; anything denser reproduces the panmictic pool with
+        extra steps.
+        """
+        rooms = self.world.rooms
+        by_device: dict = {}
+        for r in rooms:
+            by_device.setdefault(r.gpu if r.gpu is not None else r.id,
+                                 []).append(r.id)
+        devices = list(by_device)
+        adj: dict[str, list[str]] = {r.id: [] for r in rooms}
+        for members in by_device.values():           # complete inside a device
+            for a in members:
+                adj[a].extend(m for m in members if m != a)
+        if len(devices) > 1:                         # ring across devices
+            for i, dev in enumerate(devices):
+                nxt = devices[(i + 1) % len(devices)]
+                if len(devices) == 2 and i == 1:
+                    break                            # a 2-ring is one edge
+                a, b = by_device[dev][0], by_device[nxt][0]
+                adj[a].append(b)
+                adj[b].append(a)
+        return {k: sorted(set(v)) for k, v in adj.items()}
+
     def adjacency(self) -> dict[str, list[str]]:
         """Room graph as adjacency lists. 'complete' connects every pair."""
         ids = self.room_ids()
         if self.world.edges == "complete":
             return {r: [s for s in ids if s != r] for r in ids}
+        if self.world.edges == "clustered":
+            return self._clustered_adjacency()
         adj: dict[str, list[str]] = {r: [] for r in ids}
         for a, b in self.world.edges:
             if a not in adj or b not in adj:
@@ -371,7 +412,18 @@ def resolve_max_model_len(cfg: "Config", adapter_blocks: int) -> int:
                 'model.max_model_len: "auto" needs either explicit '
                 "capacity_blocks on every room, or a visible CUDA device to "
                 "size the ceiling from")
-        return (bound - adapter_blocks) * block_size + 1
+        # A room gets its DEVICE's pool divided by the rooms sharing that
+        # device, so the ceiling is sized to a room's share rather than the
+        # whole card. Sizing it to the card would leave the context window far
+        # above anything an agent could reach, which is the situation the
+        # ceiling exists to prevent — and would stretch rope ten times further
+        # than the run needs.
+        per_device: dict = {}
+        for r in cfg.world.rooms:
+            key = r.gpu if r.gpu is not None else r.id
+            per_device[key] = per_device.get(key, 0) + 1
+        busiest = max(per_device.values()) if per_device else 1
+        return (bound // busiest - adapter_blocks) * block_size + 1
     # +1 because vLLM needs the prompt plus at least one output token to fit.
     return (max(capacities) - adapter_blocks) * block_size + 1
 
@@ -477,6 +529,11 @@ def load_config(path: str | Path) -> Config:
     cfg = _build(Config, data)
     if not cfg.world.rooms:
         raise ValueError("config must declare at least one room")
+    if isinstance(cfg.world.edges, str) and \
+            cfg.world.edges not in ("complete", "clustered"):
+        raise ValueError(
+            f"world.edges must be 'complete', 'clustered', or a list of "
+            f"[room, room] pairs; got {cfg.world.edges!r}")
     if cfg.world.eviction not in (EVICT_REQUESTER, EVICT_RANDOM_HOLDER):
         raise ValueError(f"unknown eviction policy {cfg.world.eviction!r}")
     if cfg.genome.crossover not in ("uniform", "chromosomal"):

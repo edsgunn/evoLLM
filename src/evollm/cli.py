@@ -76,18 +76,33 @@ async def build_world(cfg: Config) -> World:
         from .engines.mock import POLICIES, MockEngine, WordTokenizer
         policy = POLICIES[cfg.mock.policy]
         tokenizer = WordTokenizer()
-        engines = {room.id: MockEngine(default_policy=policy, seed=cfg.seed + i,
-                                       tokenizer=tokenizer)
-                   for i, room in enumerate(cfg.world.rooms)}
+        # Mirror the GPU backend: rooms sharing a device share an engine, so
+        # tests exercise the same object graph the real runs use.
+        by_device: dict = {}
+        engines = {}
+        for i, room in enumerate(cfg.world.rooms):
+            key = room.gpu if room.gpu is not None else room.id
+            if key not in by_device:
+                by_device[key] = MockEngine(default_policy=policy,
+                                            seed=cfg.seed + i,
+                                            tokenizer=tokenizer)
+            engines[room.id] = by_device[key]
     elif cfg.backend == "vllm":
         from .engines.vllm_engine import VLLMEngine
         engines = {}
-        # Rooms are constructed sequentially: each engine core inherits the
+        by_device: dict = {}
+        # One engine per DEVICE, not per room. Model weights are ~15 GB and are
+        # already resident on the card, so additional rooms on the same GPU are
+        # free — which is what makes many small rooms per device affordable.
+        # Engines are constructed sequentially: each core inherits the
         # CUDA_VISIBLE_DEVICES set for its room at spawn time (§2.1).
         for room in cfg.world.rooms:
-            engine = VLLMEngine(cfg, room, spec)
-            await engine.start()
-            engines[room.id] = engine
+            key = room.gpu if room.gpu is not None else room.id
+            if key not in by_device:
+                engine = VLLMEngine(cfg, room, spec)
+                await engine.start()
+                by_device[key] = engine
+            engines[room.id] = by_device[key]
     else:
         raise ValueError(f"unknown backend {cfg.backend!r}")
 

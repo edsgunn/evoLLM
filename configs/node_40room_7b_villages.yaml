@@ -1,0 +1,245 @@
+# VILLAGES. Forty rooms of ten agents instead of four rooms of seventy.
+#
+# Ten virtual rooms per GPU, fully connected inside a device; the four devices
+# joined in a ring through one gateway room each. One engine per device, so
+# the extra rooms are free: the 15 GB of weights is already resident and the
+# engine addresses adapters by agent id, not by room.
+#
+# WHY
+#
+# Three problems have the same root, and it is room size.
+#
+#   Speech is unaffordable. A broadcast is paid by every listener, so at 70
+#   agents one utterance costs the room 60x what a directed tell does. The
+#   `say` run collapsed to a single agent per room and produced ONE child in
+#   400,000 steps. At ten agents a say costs nine listeners, and directed
+#   speech has meanwhile fallen to 0.2% of actions — agents have abandoned
+#   talking entirely, in every arm.
+#
+#   Nothing can diverge. Every run has been panmictic: 1.04-1.47 EFFECTIVE
+#   lineages, 95-99.5% of agents in one family. With one big room per GPU and
+#   complete edges, any local convention is diluted immediately. Forty demes
+#   with sparse connections is isolation by distance — the structure a
+#   metapopulation needs before lineages can differentiate at all.
+#
+#   The context window is stretched 5.9x. A room's ceiling is sized to what a
+#   lone survivor could hold, so smaller rooms mean a smaller ceiling: at ten
+#   rooms per device it lands at ~132,000, essentially Qwen2.5's native
+#   131,072. Agents would live inside the distribution the model was trained
+#   on for the first time.
+#
+# WHAT WE EXPECT TO LEARN
+#
+# Whether communication becomes worth doing when it is affordable, and whether
+# structure lets anything local emerge. The interesting outcome is say_share
+# rising AND reproduction holding — that would mean talking was suppressed by
+# cost, not by having nothing to say.
+#
+# WHAT WOULD FALSIFY IT
+#
+# Ne. It was 9.2 at 72 agents per room; at ten it will be 1-2, so drift
+# dominates within a deme and selection is nearly powerless locally. The
+# metapopulation argument is that selection acts BETWEEN demes instead and
+# that structure preserves variation a panmictic pool would burn — but that is
+# an argument, not a measurement. If diversity collapses inside every room and
+# the rooms then drift apart into noise rather than into distinct strategies,
+# the demes are simply too small.
+#
+# Migration rate is the dial if that happens: `go` is the only channel and it
+# succeeds 65-70%, so migration is generous by default. A ring rather than a
+# denser graph is already the conservative choice.
+#
+run_name: node-40room-7b-villages
+seed: 0
+backend: vllm
+
+model:
+  name: Qwen/Qwen2.5-7B-Instruct
+  dtype: bfloat16
+  max_model_len: auto
+  extend_context: true
+
+world:
+  rooms:
+    - {id: g0r0, gpu: 0}
+    - {id: g0r1, gpu: 0}
+    - {id: g0r2, gpu: 0}
+    - {id: g0r3, gpu: 0}
+    - {id: g0r4, gpu: 0}
+    - {id: g0r5, gpu: 0}
+    - {id: g0r6, gpu: 0}
+    - {id: g0r7, gpu: 0}
+    - {id: g0r8, gpu: 0}
+    - {id: g0r9, gpu: 0}
+    - {id: g1r0, gpu: 1}
+    - {id: g1r1, gpu: 1}
+    - {id: g1r2, gpu: 1}
+    - {id: g1r3, gpu: 1}
+    - {id: g1r4, gpu: 1}
+    - {id: g1r5, gpu: 1}
+    - {id: g1r6, gpu: 1}
+    - {id: g1r7, gpu: 1}
+    - {id: g1r8, gpu: 1}
+    - {id: g1r9, gpu: 1}
+    - {id: g2r0, gpu: 2}
+    - {id: g2r1, gpu: 2}
+    - {id: g2r2, gpu: 2}
+    - {id: g2r3, gpu: 2}
+    - {id: g2r4, gpu: 2}
+    - {id: g2r5, gpu: 2}
+    - {id: g2r6, gpu: 2}
+    - {id: g2r7, gpu: 2}
+    - {id: g2r8, gpu: 2}
+    - {id: g2r9, gpu: 2}
+    - {id: g3r0, gpu: 3}
+    - {id: g3r1, gpu: 3}
+    - {id: g3r2, gpu: 3}
+    - {id: g3r3, gpu: 3}
+    - {id: g3r4, gpu: 3}
+    - {id: g3r5, gpu: 3}
+    - {id: g3r6, gpu: 3}
+    - {id: g3r7, gpu: 3}
+    - {id: g3r8, gpu: 3}
+    - {id: g3r9, gpu: 3}
+  edges: clustered
+  block_size: 16
+  # THE ONE CHANGE. Under `requester` the agent that asks for a block when the
+  # pool is empty is the one that dies, so hazard tracks THROUGHPUT: you ask
+  # once per 16 tokens, whatever you already hold. Measured consequence across
+  # 51,000 deaths in chr001 and chr0025: the median dying agent held 0.63x the
+  # room's mean context. Big agents were SAFER than small ones, because size
+  # correlates with having drained your backlog and gone quiet.
+  #
+  # That is also why bloat is an externality. Holding 300,000 tokens raises
+  # every agent's hazard by filling the room, but the holder bears only 1/N of
+  # the harm — which is how chr0025 and uni0025 ended with two agents sitting
+  # on 310,000 tokens each in a pool that was not even full, nobody dying and
+  # nobody able to be born.
+  #
+  # `random_holder` picks the victim with probability proportional to blocks
+  # held (it draws a random held block and kills its owner). Holdings stop
+  # being a free store and become continuous exposure — rent expressed as
+  # hazard, with no new currency, no dice outside the economy and no chosen
+  # timescale. It has been in the config since the start and no run has ever
+  # used it.
+  eviction: random_holder
+  initial_population_per_room: 10
+  tools: [say, mate, go]
+  chat_format: true
+  read_policy: drain
+  observation_absorption: utterance
+  mate_window_tokens: 64
+  viability_probe_turns: 3
+
+
+refill:
+  # OFF. Immigration was scaffolding for getting a population off the ground,
+  # and the evidence says it is no longer load-bearing: in lowmut (6071675)
+  # every one of the 39 refills fired inside the first 3,500 steps of a 93,586
+  # step run, gpu1 needed none at all, and thereafter the rooms sustained
+  # themselves at 27-52 agents with a worst-case floor of 11. Nothing was being
+  # rescued after bootstrap.
+  #
+  # Worse, those bootstrap refills were an artefact of the old trigger rather
+  # than a need. A young room is empty of BLOCKS while being full of AGENTS --
+  # contexts have not grown yet -- so max_free_fraction could not tell "dying"
+  # from "just started", and put 28 fresh gen-0 genomes into gpu3 while its
+  # population was peaking at 91. That is contamination of generation 0 at
+  # exactly the point every later generation is measured against.
+  #
+  # With this off, self-sufficiency is not a statistic to be reported, it is a
+  # precondition for the run existing at all: births are the ONLY source of new
+  # agents after seeding. A population that cannot reproduce shrinks, and if
+  # the world empties, World logs an extinction event and stops (§7) -- which
+  # is a clean, interpretable negative rather than a subsidised ambiguity.
+  enabled: false
+  min_population: 0
+  max_free_fraction: null
+  check_every_steps: 500
+  max_per_check: 4
+  takeoff_window_steps: 20000
+  takeoff_min_births: 5
+
+# ── WHAT WE EXPECT TO LEARN ───────────────────────────────────────────────
+# Whether less mutation is monotonically better below the threshold, or whether
+# there is a floor past which the population starves for variation.
+#
+# Mutation is the ONLY source of new variation here -- there is no other
+# innovation operator -- and selection erodes the additive variance it feeds on.
+# lowmut already showed that erosion: phenotypic variance in canonical rate fell
+# to 0.033 against 0.15 in the sigma = 0.01 arms as the mean swept to 94.7%. At
+# 0.001, five matings move factor RMS only ~1.006x, so drift is essentially
+# frozen and the population is working almost entirely from standing gen-0
+# diversity.
+#
+# Expected if the threshold story is complete: this behaves like chr0025, maybe
+# slightly better, since less drift is strictly less damage.
+#
+# Expected if variation matters: it climbs more slowly than chr0025, or plateaus
+# at a lower canonical rate, or shows a heritability that collapses earlier as
+# the trait fixes. Any of those brackets the useful range from BELOW and means
+# there is an optimum sigma rather than a threshold to stay under.
+
+genome:
+  rank: 16
+  alpha: 32
+  target_modules: [q_proj, k_proj, v_proj, o_proj]
+  init_scale: 0.02
+  mutation_std: 0.001
+  crossover: chromosomal
+  chromosomes: 3
+  mutation: additive
+engine:
+  # lowmut and chromo were both aborted by the preemption guard after a single
+  # transient allocation failure (the counter is cumulative, and any preemption
+  # is an integrity violation by design). The economy still claims 48,000
+  # blocks per room -- unchanged, so these stay comparable to 6071675 -- but
+  # the pool underneath is grown from 75,962 blocks to give the scheduler more
+  # absolute slack for prefill bursts in the dense, fast-turnover regime that
+  # low mutation produces. safety_margin_blocks documents intent; it does not
+  # bind while capacity_blocks is explicit.
+  gpu_memory_utilization: 0.92
+  max_loras: 8
+  # Rooms now hold far more agents, so the CPU-side adapter cache has to hold
+  # them: 256 x 20.2 MB is ~5 GB of host RAM.
+  max_cpu_loras: 256
+  max_num_seqs: 128
+  enable_prefix_caching: true
+  enable_chunked_prefill: true
+  safety_margin_blocks: 4096
+  adapter_dir: /dev/shm/evollm
+
+sampling:
+  temperature: 1.0
+  top_p: 1.0
+
+run:
+  max_world_steps: 400000
+  # Genotype capture. The important part is the INHERITANCE MASK.
+  #
+  #   genome_fingerprints  writes one line per agent at creation to
+  #     <run>/genomes/<room>.jsonl. For a child it records `donors`: one bit
+  #     per site saying which parent supplied it — 112 bits, the actual act of
+  #     inheritance. Without it, descent can only be estimated by the expected
+  #     one-half rule, which is an average over births that never happened.
+  #     With it, descent is resolvable site by site back to the founder that
+  #     really contributed each one, which turns every site into a categorical
+  #     ALLELE that can be tested against behaviour directly. That is a marker
+  #     test with far more power than correlating a site's perturbation
+  #     magnitude with a trait — which is all snapshots alone could support,
+  #     and which produced no replicable hit in lowmut.
+  #
+  #     The same line also carries per-site magnitude summaries (delta_norm,
+  #     rms_a, rms_b). Cost is ~5.5 KB and ~17 ms per agent: ~70 MB and about
+  #     3 minutes over a 12,000-birth run.
+  #
+  #   snapshot_every_steps  full 40 MB genomes for the living, for work that
+  #     needs the actual factors rather than per-site summaries. Raised from
+  #     40,000 to 25,000 (~16 per room, ~32 GB). Full coverage is the
+  #     per-agent records' job now, not the snapshots'.
+  genome_fingerprints: true
+  snapshot_every_steps: 25000
+  occupancy_every_steps: 1000
+  trace_turns: 20000
+  context_snapshot_every_steps: 25000
+  context_snapshot_agents: 3

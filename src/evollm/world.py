@@ -37,12 +37,23 @@ class World:
         from pathlib import Path
         base = Path(out_dir or cfg.run.out_dir) / cfg.run_name
 
+        # Several rooms may share one engine (many small rooms per GPU). The
+        # weights are already resident, so extra rooms on a device are free —
+        # but they must divide that device's KV pool between them, or each
+        # would hand out blocks the others are also handing out.
+        rooms_per_engine: dict[int, int] = {}
+        for r in cfg.world.rooms:
+            rooms_per_engine[id(engines[r.id])] = \
+                rooms_per_engine.get(id(engines[r.id]), 0) + 1
+
         for room in cfg.world.rooms:
             engine = engines[room.id]
+            share = rooms_per_engine[id(engine)]
             capacity = room.capacity_blocks
             derived = capacity is None
             if derived:
-                capacity = engine.capacity_blocks()
+                pool = engine.capacity_blocks()
+                capacity = pool // share if pool is not None else None
             if capacity is None:
                 raise ValueError(
                     f"room {room.id}: capacity_blocks not set and the engine "
@@ -51,6 +62,8 @@ class World:
                 room.id, capacity, adapter_blocks, derived)
             if not derived:
                 engine_pool = engine.capacity_blocks()
+                if engine_pool is not None:
+                    engine_pool //= share      # this room's slice of the device
                 if engine_pool is not None and capacity > engine_pool:
                     # The controller would hand out blocks the device does not
                     # have; the engine's only recourse is preemption, which is

@@ -1,0 +1,186 @@
+# DOES SIZE-PROPORTIONAL HAZARD RESCUE sigma = 0.0025?
+#
+# chr0025 (6081311) with one word changed: the eviction policy.
+#
+# WHY THIS ARM IS THE INTERESTING ONE
+#
+# sigma = 0.0025 has 3-4x more genetic diversity than 0.001 (relative spread
+# between agents 0.081 vs 0.024) and 5-7x stronger parent->child transmission
+# of strategy (+4.1 pp over a same-room control at z = 10.6, against +0.8 pp
+# at z = 2.1). It is the regime with something for selection to actually work
+# on. It just died before it could.
+#
+# It died of bloat, which is precisely what random_holder is built to prevent.
+# So this is the arm where the eviction fix has the most to prove, and where
+# success would be worth more than it was at 0.001 — that run was already
+# healthy.
+#
+# WHAT WE EXPECT TO LEARN
+#
+#   births reaching zero by step ~80,000  ->  does reproduction survive?
+#   mean context 250,000-310,000 at end   ->  does it stay near 10,000?
+#   context at death 0.64x room mean      ->  above 1.0
+#   the room_id tic reaching 58% of moves ->  does it still sweep?
+#
+# The tic is the subtle one. It swept because selection was only ~2x stronger
+# than drift at Ne = 2.3. If random_holder lifts Ne the way it did at 0.001
+# (5.7 -> 9.2), selection against a behaviour costing 34-40% of reproduction
+# becomes several times more effective, and the sweep may not happen at all.
+#
+# WHAT WOULD FALSIFY IT
+#
+# Collapse anyway, on the same timetable. That would mean bloat was a symptom
+# rather than the cause, and the thing killing sigma = 0.0025 is the mutation
+# rate itself — in which case 0.001 is not a tuning choice but the only
+# regime that works.
+#
+run_name: node-4room-7b-chr0025-evict
+seed: 0
+backend: vllm
+
+model:
+  name: Qwen/Qwen2.5-7B-Instruct
+  dtype: bfloat16
+  max_model_len: auto
+  extend_context: true
+
+world:
+  rooms:
+    - {id: gpu0, gpu: 0, capacity_blocks: 48000}
+    - {id: gpu1, gpu: 1, capacity_blocks: 48000}
+    - {id: gpu2, gpu: 2, capacity_blocks: 48000}
+    - {id: gpu3, gpu: 3, capacity_blocks: 48000}
+  edges: complete
+  block_size: 16
+  # The change. chr0025 (6081311) died of bloat collapse: births fell to zero
+  # by step 80,000 and the rooms ended holding two or three agents at 250,000
+  # to 310,000 tokens each, in a pool that was not even full. Under
+  # `requester`, hazard tracks throughput rather than holdings — the median
+  # dying agent held 0.64x the room mean — so the bloated were the SAFEST
+  # agents in the room and nothing removed them.
+  #
+  # random_holder draws the victim in proportion to blocks held. At sigma =
+  # 0.001 it moved context-at-death from 0.63x to 1.40x the room mean, raised
+  # Ne from 5.7 to 9.2, cut mean context and lifted canonical rate to 96.9%.
+  # This asks whether the same rule rescues the arm that actually needed it.
+  eviction: random_holder
+  initial_population_per_room: 32
+  tools: [tell, mate, go]
+  chat_format: true
+  read_policy: drain
+  observation_absorption: utterance
+  mate_window_tokens: 64
+  viability_probe_turns: 3
+
+
+refill:
+  # OFF. Immigration was scaffolding for getting a population off the ground,
+  # and the evidence says it is no longer load-bearing: in lowmut (6071675)
+  # every one of the 39 refills fired inside the first 3,500 steps of a 93,586
+  # step run, gpu1 needed none at all, and thereafter the rooms sustained
+  # themselves at 27-52 agents with a worst-case floor of 11. Nothing was being
+  # rescued after bootstrap.
+  #
+  # Worse, those bootstrap refills were an artefact of the old trigger rather
+  # than a need. A young room is empty of BLOCKS while being full of AGENTS --
+  # contexts have not grown yet -- so max_free_fraction could not tell "dying"
+  # from "just started", and put 28 fresh gen-0 genomes into gpu3 while its
+  # population was peaking at 91. That is contamination of generation 0 at
+  # exactly the point every later generation is measured against.
+  #
+  # With this off, self-sufficiency is not a statistic to be reported, it is a
+  # precondition for the run existing at all: births are the ONLY source of new
+  # agents after seeding. A population that cannot reproduce shrinks, and if
+  # the world empties, World logs an extinction event and stops (§7) -- which
+  # is a clean, interpretable negative rather than a subsidised ambiguity.
+  enabled: false
+  min_population: 0
+  max_free_fraction: null
+  check_every_steps: 500
+  max_per_check: 4
+  takeoff_window_steps: 20000
+  takeoff_min_births: 5
+
+# ── WHAT WE EXPECT TO LEARN ───────────────────────────────────────────────
+# This is the headline arm: the only regime known to take off, now with faithful
+# inheritance under it and run to full length with no immigration.
+#
+# Expected: reproduction climbs across generations as it did in lowmut
+# (1.33 -> 8.54 children per 100 turns), canonical-action rate settles above
+# 90%, population holds at 30-80 agents per room, and generations accumulate at
+# roughly 500 steps each -- so 400,000 steps should reach generation ~800 if the
+# climb is sustained.
+#
+# The genuinely open question is where it PLATEAUS. lowmut died at 93,586 steps
+# with reproduction still rising, so we have never seen the top of that curve.
+# A plateau would mean selection has exhausted the standing additive variance;
+# a continued climb would mean new variation is still being found and used.
+#
+# Would falsify the error-threshold reading: reproduction failing to climb, or
+# climbing and then reversing, at a sigma we have already seen work. That would
+# mean lowmut's result depended on refill or on the old observation framing
+# rather than on the mutation rate.
+
+genome:
+  rank: 16
+  alpha: 32
+  target_modules: [q_proj, k_proj, v_proj, o_proj]
+  init_scale: 0.02
+  mutation_std: 0.0025
+  crossover: chromosomal
+  chromosomes: 3
+  mutation: additive
+engine:
+  # lowmut and chromo were both aborted by the preemption guard after a single
+  # transient allocation failure (the counter is cumulative, and any preemption
+  # is an integrity violation by design). The economy still claims 48,000
+  # blocks per room -- unchanged, so these stay comparable to 6071675 -- but
+  # the pool underneath is grown from 75,962 blocks to give the scheduler more
+  # absolute slack for prefill bursts in the dense, fast-turnover regime that
+  # low mutation produces. safety_margin_blocks documents intent; it does not
+  # bind while capacity_blocks is explicit.
+  gpu_memory_utilization: 0.92
+  max_loras: 8
+  # Rooms now hold far more agents, so the CPU-side adapter cache has to hold
+  # them: 256 x 20.2 MB is ~5 GB of host RAM.
+  max_cpu_loras: 256
+  max_num_seqs: 128
+  enable_prefix_caching: true
+  enable_chunked_prefill: true
+  safety_margin_blocks: 4096
+  adapter_dir: /dev/shm/evollm
+
+sampling:
+  temperature: 1.0
+  top_p: 1.0
+
+run:
+  max_world_steps: 400000
+  # Genotype capture. The important part is the INHERITANCE MASK.
+  #
+  #   genome_fingerprints  writes one line per agent at creation to
+  #     <run>/genomes/<room>.jsonl. For a child it records `donors`: one bit
+  #     per site saying which parent supplied it — 112 bits, the actual act of
+  #     inheritance. Without it, descent can only be estimated by the expected
+  #     one-half rule, which is an average over births that never happened.
+  #     With it, descent is resolvable site by site back to the founder that
+  #     really contributed each one, which turns every site into a categorical
+  #     ALLELE that can be tested against behaviour directly. That is a marker
+  #     test with far more power than correlating a site's perturbation
+  #     magnitude with a trait — which is all snapshots alone could support,
+  #     and which produced no replicable hit in lowmut.
+  #
+  #     The same line also carries per-site magnitude summaries (delta_norm,
+  #     rms_a, rms_b). Cost is ~5.5 KB and ~17 ms per agent: ~70 MB and about
+  #     3 minutes over a 12,000-birth run.
+  #
+  #   snapshot_every_steps  full 40 MB genomes for the living, for work that
+  #     needs the actual factors rather than per-site summaries. Raised from
+  #     40,000 to 25,000 (~16 per room, ~32 GB). Full coverage is the
+  #     per-agent records' job now, not the snapshots'.
+  genome_fingerprints: true
+  snapshot_every_steps: 25000
+  occupancy_every_steps: 1000
+  trace_turns: 20000
+  context_snapshot_every_steps: 25000
+  context_snapshot_agents: 3

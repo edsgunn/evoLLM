@@ -64,14 +64,19 @@ def make_world(cfg: Config, policies: dict[str, object] | None = None,
     spec = spec_from_dims(num_layers=2, projections={"q_proj": (8, 8)},
                           rank=4, alpha=8)
     tokenizer = tokenizer or WordTokenizer()
-    engines = {
-        room.id: MockEngine(default_policy=default_policy or quiet_policy,
-                            policies=policies or {}, seed=cfg.seed + i,
-                            tokenizer=tokenizer,
-                            capacity_blocks=engine_capacity,
-                            chat_format=chat_format)
-        for i, room in enumerate(cfg.world.rooms)
-    }
+    # Mirror cli.build_world: rooms sharing a device share an engine, so the
+    # tests exercise the same object graph the real runs use.
+    by_device: dict = {}
+    engines = {}
+    for i, room in enumerate(cfg.world.rooms):
+        key = room.gpu if room.gpu is not None else room.id
+        if key not in by_device:
+            by_device[key] = MockEngine(
+                default_policy=default_policy or quiet_policy,
+                policies=policies or {}, seed=cfg.seed + i,
+                tokenizer=tokenizer, capacity_blocks=engine_capacity,
+                chat_format=chat_format)
+        engines[room.id] = by_device[key]
     return World(cfg, engines, spec, adapter_blocks=cfg.mock.adapter_blocks)
 
 

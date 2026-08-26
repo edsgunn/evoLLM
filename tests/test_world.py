@@ -210,3 +210,68 @@ async def test_one_rooms_preemption_does_not_abort_another(tmp_cfg):
     for _ in range(5):
         await r1.run_step()                     # untouched by r0's trouble
     assert r1.preemptions == 0 and r1.step_count == 5
+
+
+# ── virtual rooms: many small rooms sharing one device ────────────────────
+def _clustered_cfg(tmp_cfg, rooms_per_gpu=3, gpus=4, **kw):
+    from evollm.config import RoomConfig
+    cfg = tmp_cfg(**kw)
+    cfg.world.rooms = [RoomConfig(id=f"g{g}r{i}", gpu=g, capacity_blocks=cfg.world.rooms[0].capacity_blocks)
+                       for g in range(gpus) for i in range(rooms_per_gpu)]
+    cfg.world.edges = "clustered"
+    return cfg
+
+
+def test_rooms_on_one_device_share_a_single_engine(tmp_cfg):
+    """The weights are ~15 GB and already resident, so extra rooms on a card
+    must be free — which requires them to share the engine, not build one
+    each."""
+    cfg = _clustered_cfg(tmp_cfg, rooms_per_gpu=3, gpus=2, capacity=400, pop=2)
+    world = make_world(cfg)
+    engines = {id(c.engine) for c in world.controllers.values()}
+    assert len(engines) == 2, "one engine per device, not per room"
+    per_gpu = {}
+    for rid, c in world.controllers.items():
+        per_gpu.setdefault(id(c.engine), set()).add(rid)
+    assert all(len(v) == 3 for v in per_gpu.values())
+
+
+def test_clustered_topology_is_complete_within_a_device_and_a_ring_across(tmp_cfg):
+    cfg = _clustered_cfg(tmp_cfg, rooms_per_gpu=3, gpus=4, capacity=400, pop=1)
+    adj = cfg.adjacency()
+    # every room reaches all its own device's rooms
+    for g in range(4):
+        members = {f"g{g}r{i}" for i in range(3)}
+        for m in members:
+            assert members - {m} <= set(adj[m]), f"{m} does not see its cluster"
+    # only room 0 of each device leaves it, and it reaches exactly two others
+    for g in range(4):
+        outside = [r for r in adj[f"g{g}r0"] if not r.startswith(f"g{g}")]
+        assert len(outside) == 2, outside
+        for i in (1, 2):
+            assert all(r.startswith(f"g{g}") for r in adj[f"g{g}r{i}"]), \
+                "non-gateway rooms must not leave the device"
+
+
+def test_derived_capacity_is_split_between_rooms_sharing_a_device(tmp_cfg):
+    """Rooms sharing a device must divide its pool, or each would hand out
+    blocks the others are also handing out."""
+    from evollm.config import RoomConfig
+    cfg = tmp_cfg(capacity=None, pop=1)
+    cfg.model.max_model_len = 10 ** 7
+    cfg.world.rooms = [RoomConfig(id=f"g0r{i}", gpu=0) for i in range(4)]
+    world = make_world(cfg, engine_capacity=4000)
+    caps = {c.pool.capacity for c in world.controllers.values()}
+    assert caps == {1000}, caps
+    assert sum(c.pool.capacity for c in world.controllers.values()) <= 4000
+
+
+async def test_many_small_rooms_run_and_agents_migrate_within_a_cluster(tmp_cfg):
+    cfg = _clustered_cfg(tmp_cfg, rooms_per_gpu=3, gpus=2, capacity=600, pop=4)
+    world = make_world(cfg, default_policy=go_to("g0r1"))
+    await world.seed()
+    await run_steps(world, 400)
+    assert len(world.controllers) == 6
+    moved = sum(1 for e in read_events(world.controllers["g0r1"].log.path)
+                if e["type"] == "arrival")
+    assert world.population > 0
