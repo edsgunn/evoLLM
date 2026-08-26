@@ -33,6 +33,12 @@ class WorldConfig:
     edges: Any = "complete"
     block_size: int = 16              # tokens per KV block
     eviction: str = EVICT_REQUESTER
+    # How the prompt writes its argument slots: "identifier" (agent_id,
+    # room_id) or "braced" ({agent}, {room}). Agents copy identifier-style
+    # placeholders verbatim — "room_id" became a majority of move attempts in
+    # several runs — producing a well-formed, always-failing action selection
+    # could not remove. Default is unchanged so existing runs stay comparable.
+    prompt_placeholders: str = "identifier"
     # Parents carry their children's adapter blocks (§3.2). Reproduction is
     # otherwise free: the child's 22 adapter blocks come out of the room pool
     # and neither parent pays anything, which is why offspring number has
@@ -529,6 +535,11 @@ def load_config(path: str | Path) -> Config:
     cfg = _build(Config, data)
     if not cfg.world.rooms:
         raise ValueError("config must declare at least one room")
+    from .prompts import PLACEHOLDER_STYLES
+    if cfg.world.prompt_placeholders not in PLACEHOLDER_STYLES:
+        raise ValueError(
+            f"world.prompt_placeholders must be one of {PLACEHOLDER_STYLES}, "
+            f"got {cfg.world.prompt_placeholders!r}")
     if isinstance(cfg.world.edges, str) and \
             cfg.world.edges not in ("complete", "clustered"):
         raise ValueError(

@@ -675,3 +675,49 @@ async def test_every_block_is_closed_before_the_next_opens(tmp_cfg):
         for chunk in parts[:-1]:
             assert "<|im_end|>" in chunk, \
                 f"{aid}: unclosed block before next opener: {chunk[:120]!r}"
+
+
+def test_braced_placeholders_replace_identifier_shaped_slots():
+    """`room_id` and `agent_id` look exactly like the names they stand for, and
+    agents emit them verbatim — the literal string became a majority of move
+    attempts in several runs. Braced slots read as notation instead."""
+    from evollm import prompts
+    ident = prompts.system_prompt("a0", "gpu0", ["gpu1"], others=["a1"],
+                                  tools=["tell", "mate", "go"])
+    braced = prompts.system_prompt("a0", "gpu0", ["gpu1"], others=["a1"],
+                                   tools=["tell", "mate", "go"],
+                                   placeholders="braced")
+    for token in ("room_id", "agent_id", "sender_id", "your_id"):
+        assert token in ident
+        assert token not in braced, f"{token} survived in the braced prompt"
+    for token in ("{room}", "{agent}", "{sender}", "{you}"):
+        assert token in braced
+    # the agent's own id and room are still real, in both
+    for p in (ident, braced):
+        assert "a0" in p and "gpu0" in p and "gpu1" in p
+
+
+def test_braced_placeholder_copies_are_still_countable():
+    """The behaviour must stay measurable: a copied slot has to remain a
+    well-formed action with an undeliverable target, not become unparseable.
+
+    Note the parser strips the braces, so a copied `{room}` arrives as the
+    target `room` — still invalid, still countable, but under a DIFFERENT
+    literal from the identifier-style runs. Any analysis counting placeholder
+    copies has to look for both token sets.
+    """
+    from evollm.actions import classify
+    parsed = classify("<go>{room}</go>")
+    assert type(parsed.action).__name__ == "Go"
+    assert parsed.action.room == "room", parsed.action.room
+    parsed = classify("<mate>{agent}</mate>")
+    assert type(parsed.action).__name__ == "Mate"
+    assert parsed.action.target == "agent"
+    # and it is not a real id, so it fails delivery exactly as before
+    assert parsed.action.target not in ("a0", "a1")
+
+
+def test_placeholder_style_is_validated():
+    from evollm import prompts
+    with pytest.raises(ValueError, match="placeholders"):
+        prompts.system_prompt("a0", "r0", [], placeholders="nonsense")

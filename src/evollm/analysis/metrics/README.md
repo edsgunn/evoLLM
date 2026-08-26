@@ -17,6 +17,17 @@ template is `runs/_TEMPLATE_NOTES.md`.
 | `behaviour.md` | canonical rate, action composition, efficacy, reproduction |
 | `population-structure.md` | panmixia, effective lineages, niches, metapopulations |
 
+## What the genome can express
+
+Which modules are adapted is not a size knob, it is a choice of function class.
+Attention governs **routing** — which positions attend to which — and given the
+attention pattern the value/output path is linear. The MLP is where the
+**per-position computation** and the nonlinearity live. So an attention-only
+genome can re-weight and re-route what the base model already computes, but
+cannot change *what is computed*. Comparisons across runs with different
+`target_modules` are comparisons across different search spaces, not across
+different amounts of the same one.
+
 ## The three questions everything serves
 
 1. **Can selection act?** — `effective-population-size.md`, `heritability.md`

@@ -1,78 +1,43 @@
-# MLP GENOME. chr001_evict (sigma = 0.001, chromosomal c=3, random_holder,
-# refill off) with two changes: the genome now adapts the MLP as well as
-# attention, and room capacity is taken from the engine instead of being
-# hand-set.
+# THE PLACEHOLDER FIX. chr001_evict (the reference configuration) with one
+# field changed: how the prompt writes its argument slots.
 #
-# This is an exploration, not a controlled contrast — it moves more than one
-# thing at once, deliberately, because both changes are about giving the
-# population more room to work in.
+# WHY
 #
-# WHAT IS ACTUALLY DIFFERENT HERE
+# The most destructive behaviour we have found is agents emitting the prompt's
+# own example argument as a destination or target. It is well-formed, it is
+# counted as canonical, and it always fails — a degenerate action that costs a
+# turn and changes nothing. Selection has repeatedly failed to remove it,
+# because at the effective population sizes we get, a behaviour costing a third
+# of an agent's reproduction is only about twice as strong as drift.
 #
-# Not "4x more parameters". The MLP does a different JOB from attention, and
-# adapting it opens a class of change that attention-only evolution cannot
-# reach at any size.
-#
-#   Attention decides ROUTING — which positions attend to which, and how
-#   information moves between them. Given the attention pattern, the v/o path
-#   is a linear map. Evolving q/k/v/o lets a population re-weight and re-route
-#   what the base model already computes.
-#
-#   The MLP is where the per-position COMPUTATION happens, and where the
-#   nonlinearity lives (SwiGLU across gate and up). It is also, on the
-#   interpretability evidence, where much of a transformer's stored knowledge
-#   and feature construction sit.
-#
-# So attention-only evolution can change what the model ATTENDS TO. It cannot
-# change what the model COMPUTES at a position. Every run so far has been
-# searching a space of re-mixings of a fixed feature set. This is the first run
-# where the features themselves are heritable material.
+# The proximate cause has never been touched. `room_id` and `agent_id` look
+# exactly like the names they stand for. Braces are conventional template
+# notation and read as a slot rather than a name.
 #
 # WHAT WE EXPECT TO LEARN
 #
-#   Does a qualitatively larger function class produce qualitatively different
-#   behaviour, or just more of the same?
-#     The interesting outcome is a behaviour no attention-only run produced —
-#     not simply higher canonical rate or more births. Worth checking whether
-#     the per-site gene-behaviour associations land preferentially on MLP
-#     sites: if they do, the population is using the new material rather than
-#     carrying it as dead weight.
+# Whether the tic is a prompt-design artefact or something deeper. If the
+# placeholder share of move attempts stays near zero where the reference run
+# rose over generations, it was design. If it reappears under a new literal,
+# agents are reaching for ANY cheap always-failing action and the problem is
+# that a failed move is too cheap — which would be a much more interesting
+# result and a different fix entirely.
 #
-#   Does heritable variation rise without touching sigma?
-#     Genome spread between agents was 2.3% of their distance from the base
-#     model at sigma = 0.001, and parent->child strategy concordance only
-#     +0.8 pp over a same-room control. Both have been the binding constraint
-#     on selection. If 196 sites give selection more to grip, both should rise.
+# WHAT TO MEASURE, AND A TRAP
 #
-#   Does a 4x adapter cost change reproduction on its own?
-#     88 blocks per birth against 22. Under random_holder, hazard tracks blocks
-#     held, so a room full of children is a room where everyone is closer to
-#     eviction. Watch V_k (40.2 in chr001) and Ne (5.7).
-#
-#   Does 1.66x the usable pool change the ecology?
-#     ~79,600 blocks per room instead of 48,000. At 100 agents that is 11,335
-#     tokens of context each rather than ~7,000.
-#
-# THE RISK THAT COMES WITH THE EXPRESSIVITY
-#
-# sigma is per-element, so 196 sites drift independently where 112 did. The
-# per-site relative perturbation is unchanged, but the total functional
-# displacement per generation is larger, because it accumulates across four
-# times as many parameters. The error threshold may therefore sit LOWER for
-# this genome: sigma = 0.001 is comfortably below it for attention-only and
-# might not be for attention plus MLP.
-#
-# If this run degrades in the way the sigma = 0.0025 arms did — reproduction
-# falling, contexts climbing, the room_id tic sweeping — the first thing to try
-# is not abandoning the MLP but lowering sigma to match the larger genome.
+# The parser strips braces, so a copied {room} arrives as the target `room`,
+# NOT `{room}`. Counting only the identifier-style literals would make this run
+# look clean when it is not. Count both token sets.
 #
 # WHAT WOULD FALSIFY IT
 #
-# Fewer agents per room, or lower canonical-action rate, would mean the bigger
-# adapter is crowding out the context the agents actually think with. The
-# check is agents/room against chr001's 60.9 and canonical rate against 93.6%.
+# No change in move success or canonical rate against the reference. That would
+# mean the tic was never costing much and the effort belongs elsewhere.
 #
-run_name: node-4room-7b-mlp
+# Note this changes the environment, so the run is only comparable to
+# chr001_evict (6127798) and to nothing before it.
+#
+run_name: node-4room-7b-braced
 seed: 0
 backend: vllm
 
@@ -83,16 +48,11 @@ model:
   extend_context: true
 
 world:
-  # No capacity_blocks: each room takes the engine's whole measured pool minus
-  # engine.safety_margin_blocks. Hand-setting 48,000 left 35,744 blocks —
-  # 30.5 GB — reserved by vLLM at startup and never usable by any agent,
-  # because the number had been chosen once against a context ceiling and then
-  # carried forward. Derived, it is ~79,600.
   rooms:
-    - {id: gpu0, gpu: 0}
-    - {id: gpu1, gpu: 1}
-    - {id: gpu2, gpu: 2}
-    - {id: gpu3, gpu: 3}
+    - {id: gpu0, gpu: 0, capacity_blocks: 48000}
+    - {id: gpu1, gpu: 1, capacity_blocks: 48000}
+    - {id: gpu2, gpu: 2, capacity_blocks: 48000}
+    - {id: gpu3, gpu: 3, capacity_blocks: 48000}
   edges: complete
   block_size: 16
   # THE ONE CHANGE. Under `requester` the agent that asks for a block when the
@@ -115,6 +75,12 @@ world:
   # timescale. It has been in the config since the start and no run has ever
   # used it.
   eviction: random_holder
+  # Write the prompt's argument slots as {room} / {agent} rather than room_id /
+  # agent_id. Agents copy identifier-shaped placeholders verbatim: the literal
+  # string "room_id" grew to a majority of all move attempts in several runs,
+  # and to 87% of tell targets in one. It parses, it counts as canonical, and
+  # it always fails.
+  prompt_placeholders: braced
   initial_population_per_room: 32
   tools: [tell, mate, go]
   chat_format: true
@@ -175,18 +141,7 @@ refill:
 genome:
   rank: 16
   alpha: 32
-  # All seven projections. The MLP is where most of the computation happens
-  # and it has never been adapted: every run so far mutated attention only,
-  # 112 sites of 10.1M parameters. With gate/up/down it is 196 sites and
-  # 40.4M parameters — 4x the genome.
-  #
-  # Two reasons beyond expressiveness. The adapter grows 20 MB -> 77 MB, i.e.
-  # 22 -> 88 blocks per agent, so a birth removes four times as much real
-  # memory from the pool and reproduction acquires a genuine cost without any
-  # invented tax. And genome diversity has been tiny — agents differ by 2.3%
-  # of their distance from the base model at sigma = 0.001 — so more adapted
-  # parameters is a way to get heritable variation without raising sigma.
-  target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+  target_modules: [q_proj, k_proj, v_proj, o_proj]
   init_scale: 0.02
   mutation_std: 0.001
   crossover: chromosomal
@@ -205,9 +160,7 @@ engine:
   max_loras: 8
   # Rooms now hold far more agents, so the CPU-side adapter cache has to hold
   # them: 256 x 20.2 MB is ~5 GB of host RAM.
-  # 77 MB per adapter now, not 20. Four rooms x 128 adapters = 38.5 GB of the
-  # node's 460 GB, and a room's population has never exceeded ~110.
-  max_cpu_loras: 128
+  max_cpu_loras: 256
   max_num_seqs: 128
   enable_prefix_caching: true
   enable_chunked_prefill: true

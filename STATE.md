@@ -93,24 +93,30 @@ Last updated: 2026-08-26.
 - **Chromosomal crossover transmits phenotype more faithfully than uniform.**
   Established only on heritability, in a controlled pair at adequate sample
   size; it did not clearly win on outcomes. — *likely* —
-  `runs/node_4room_7b_chr0025_6081311/ANALYSIS.txt`
+  `runs/node_4room_7b_uni0025_6081397/NOTES.md`
 - **One chromosome is too few.** Tightest linkage loses diversity fastest,
   because the genome travels as a single unit and recombination cannot break up
-  a sweep. — *likely* — `runs/_figures/5_diversity_vs_pathology.png`
+  a sweep. — *likely* — `runs/node_4room_7b_chr0025_c1_6081314/NOTES.md`
 - **Strategy is heritable at parent-to-child range.** — *established* —
   `src/evollm/analysis/README.md` (see the lineage-label section)
 - **Founder-level lineage labels are useless at depth.** By generation 200
   everyone shares the same founders, so a test built on them reports "not
   heritable" however strongly parents resemble children. — *established* — same
+- **A low h² does not always mean weak transmission.** Where a trait sits near
+  its ceiling — canonical rate is 97.7% in the reference run — phenotypic
+  variance is compressed and h² falls even though the trait has been fixed *by*
+  selection. Read h² next to the trait's spread, never alone. — *established* —
+  `runs/node_4room_7b_chr001_evict_6127798/NOTES.md`
 - **Genome diversity stays tiny.** Agents differ from each other by a small
   fraction of their own distance from the base model. — *likely* —
-  `runs/_figures/README.md`
+  `runs/node_4room_7b_chr001_6081313/NOTES.md`
 
 ### Selection is weak, and we know why
 
 - **Effective population size is tiny — single digits — because the variance in
   offspring number is enormous.** The census population is fine; V_k is what
-  destroys Ne. — *established* — `runs/_figures/README.md`
+  destroys Ne. — *established* —
+  `runs/node_4room_7b_chr001_evict_6127798/NOTES.md`
 - **Selection is therefore only about twice as strong as drift.** A behaviour
   costing a third of an agent's reproduction can still sweep. — *established* —
   same
@@ -133,6 +139,11 @@ Last updated: 2026-08-26.
   eviction fix.** It suppressed reproduction rather than concentrating it, and
   left Ne worse than eviction alone. — *likely* —
   `runs/node_4room_7b_chr001_invest_6127799/`
+- **Unexplained: the reproduction charge anticorrelates parent and child
+  strategy** (z = −21.4). Possibly an artefact of parents becoming large holders
+  and so eviction targets under `random_holder`. Measure before reusing any
+  reproduction charge. — *open question* —
+  `runs/node_4room_7b_chr001_invest_6127799/NOTES.md`
 - **Immigration (refill) is unnecessary once inheritance works, and was
   contaminating generation 0.** — *established* —
   `runs/node_4room_7b_norefill_6070759/NOTES.md`
@@ -159,8 +170,10 @@ Last updated: 2026-08-26.
 | job | what it changes | the question |
 |---|---|---|
 | `chr0025_evict` 6141384 | σ=0.0025 with `random_holder` | Does size-proportional hazard rescue the regime that has the diversity but died of bloat? This is the arm where the eviction fix has most to prove. |
-| `mlp` 6141167 | genome adapts the MLP as well as attention; capacity derived from the engine | Does a 4× larger genome carry more heritable variation without raising σ? Does a 4× adapter cost change reproduction on its own? |
+| `mlp` 6141167 | genome adapts the MLP as well as attention; capacity derived from the engine | **The first run where what the model *computes* is heritable, not just what it attends to.** Attention governs routing; the MLP is where per-position computation and the nonlinearity live. Every run so far has searched re-mixings of a fixed feature set. Does a qualitatively larger function class produce qualitatively different behaviour? |
 | `villages` 6141411 | 40 rooms of 10 agents, `say`, clustered topology | Is speech worth doing when it is affordable? Does a metapopulation let anything local emerge? |
+| `baserate` 6143004 | zero-genome agents (the frozen base model) | **Closes the largest gap.** Every comparison so far has been internal, so "takeoff" means beating a *randomly perturbed* base model rather than the model itself. |
+| `braced` 6143016 | prompt slots written `{room}` not `room_id` | Is the degenerate placeholder action a prompt-design artefact, or are agents reaching for *any* cheap always-failing action? |
 
 Each config states its own expected outcome and what would falsify it, in the
 header. Read those before reading the results.
@@ -175,15 +188,29 @@ show.
 
 ## What we want to learn
 
+### Blind spots in what we measure
+
+- **Surprise has never been measured.** `evollm eval-surprise` exists and has
+  never been run. The project's hypothesis is about surprise minimisation.
+- **Nothing measures change within an agent's lifetime.** Every trait is a
+  lifetime aggregate. A first look finds no within-life improvement, and a small
+  significant *decline* in one run — which would mean all measured improvement
+  lives in the initialisation, not in the context. — *provisional*
+- **No analysis reads what agents say.** Tens of thousands of turns of raw text
+  per run, never examined; nor whether a reply is conditioned on what was
+  received.
+
 ### Holes in what we have already run
 
-- **We have never measured the base model.** Every comparison is internal, so
-  "takeoff" currently means beating a randomly perturbed base model rather than
-  the model itself. `evollm precheck-handshake` does this; it has never been run
-  post-chat-format. **This is the largest single gap.**
+- ~~**We have never measured the base model.**~~ Being measured now (6143004).
+  Until it reports, every "takeoff" claim means beating a *randomly perturbed*
+  base model, not the model itself.
 - **The critical mutation rate is bracketed between 0.001 and 0.0025 and has
   never been localised**, nor do we know what it depends on — population size,
-  genome size, adapter rank, or the base model.
+  genome size, adapter rank, or the base model. **Genome size is the live
+  candidate**: σ is per-element, so a genome with more sites accumulates more
+  total functional displacement per generation at the same σ, and the threshold
+  may sit lower for it.
 - **The lower bound on useful mutation is unknown.** Nothing below 0.001 has run.
 - **Chromosome count is barely explored.** Only 1, 3 and 112 (uniform), all at
   σ=0.0025 where the population dies anyway. 7 and 14 were proposed and never
@@ -206,9 +233,10 @@ show.
   tested now.
 - **Can niches form at all in this world?** Requires structure that has never
   existed until the villages run.
-- **Is the degenerate-action problem solvable by prompt design?** The
-  placeholders are the proximate cause and have never been changed. A prompt
-  with non-referential example arguments is a one-line experiment nobody has run.
+- **Is the degenerate-action problem solvable by prompt design?** Being tested
+  now (6143016). If the tic reappears under a new literal, agents are reaching
+  for *any* cheap always-failing action and the real problem is that a failed
+  move is too cheap.
 - **Does takeoff continue or plateau?** Every surviving run was still improving
   when its clock ran out.
 - **Should chromosome count, rank, or mutation rate be evolvable rather than

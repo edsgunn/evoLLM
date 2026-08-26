@@ -1,3 +1,10 @@
+# STATUS: SUPERSEDED — do not submit without checking why
+# Ran as job 6131724. CLOSED — broadcast speech is unaffordable at ~60
+# agents per room: one child in 400,000 steps and the population collapsed
+# to a single agent per room. See archive/2026-08_say_collapse/README.md.
+# The question it was asking is now carried by node_40room_7b_villages.yaml,
+# which makes rooms small enough for speech to be affordable.
+#
 # BROADCAST SPEECH. chr001_evict (sigma = 0.001, chromosomal c=3,
 # random_holder, refill off, capacity 48,000) with one word changed: `tell`
 # becomes `say`.

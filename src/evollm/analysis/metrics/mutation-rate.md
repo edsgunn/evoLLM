@@ -64,6 +64,12 @@ tension is unresolved.
 
 - **The threshold is not a fixed number.** It has only been bracketed, and what
   it depends on — population size, genome size, rank, base model — is unknown.
+  **Genome size is the most likely dependence.** σ is per-element, so a genome
+  with more adapted sites drifts further in total per generation at the same σ,
+  even though the per-site relative perturbation is identical. A σ that is
+  comfortably below threshold for an attention-only genome may not be for one
+  that also adapts the MLP. Whenever the adapted module set changes, treat the
+  threshold as unmeasured again.
 - **Diversity peaking then falling is a sweep signature**, not simply drift. In
   a collapsing run it is also just the remnant of a dying population, which is
   not the same thing. Check whether births were still happening.

@@ -1,3 +1,8 @@
+# STATUS: REFERENCE
+# Ran as job 6127798. This is now the REFERENCE configuration: sigma 0.001,
+# chromosomal c=3, random_holder eviction, refill off. Read new arms against
+# it. See runs/node_4room_7b_chr001_evict_6127798/.
+#
 # EVICTION TEST. chr001 (job 6081313) with one word changed: the eviction
 # policy. Everything else — sigma = 0.001, chromosomal crossover with 3
 # chromosomes, refill off, 48,000 blocks per room, merged observation framing

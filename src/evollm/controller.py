@@ -141,7 +141,8 @@ class RoomController:
     def _enqueue_system_prompt(self, agent: Agent) -> None:
         text = prompts.system_prompt(
             agent.id, self.room_id, self.world.adjacent(self.room_id),
-            others=self._others(agent.id), tools=self.cfg.world.tools)
+            others=self._others(agent.id), tools=self.cfg.world.tools,
+            placeholders=self.cfg.world.prompt_placeholders)
         self._enqueue(agent, text, role="system")
 
     def _enqueue(self, agent: Agent, text: str, role: str = "user") -> int:

@@ -43,6 +43,26 @@ _SIGNATURES = {
     "go": "<go>room_id</go>",
 }
 
+# The same slots written so they cannot be mistaken for identifiers.
+#
+# `room_id` and `agent_id` look exactly like the names they stand for, and
+# agents emit them verbatim: the literal string "room_id" grew to a majority of
+# all move attempts in several runs, and to 87% of tell targets in one. It
+# parses, it counts as canonical, and it always fails — a degenerate action
+# that costs a turn and changes nothing, which selection has repeatedly failed
+# to remove.
+#
+# Braces are conventional template notation and read as a slot rather than a
+# name. Copying one still produces a well-formed, undeliverable action, so the
+# behaviour stays countable exactly as before; it is only made less inviting.
+_SIGNATURES_BRACED = {
+    "say": "<say>{message}</say>",
+    "tell": "<tell>{agent}|{message}</tell>",
+    "mate": "<mate>{agent}</mate>",
+    "accept": "<accept>{agent}</accept>",
+    "go": "<go>{room}</go>",
+}
+
 # verb -> (line received, action emitted in reply). None means the action is
 # not a reply to anything.
 _EXAMPLES = {
@@ -52,10 +72,20 @@ _EXAMPLES = {
     "go": (None, "<go>room_id</go>"),
 }
 
+_EXAMPLES_BRACED = {
+    "say": ("{sender}: <say>{message}</say>", "<say>{message}</say>"),
+    "tell": ("{sender}: <tell>{you}|{message}</tell>", "<tell>{sender}|{message}</tell>"),
+    "mate": ("{sender}: <mate>{sender}</mate>", "<mate>{sender}</mate>"),
+    "go": (None, "<go>{room}</go>"),
+}
+
+PLACEHOLDER_STYLES = ("identifier", "braced")
+
 
 def system_prompt(agent_id: str, room_id: str, adjacent: list[str],
                   others: list[str] | None = None,
-                  tools: list[str] | None = None) -> str:
+                  tools: list[str] | None = None,
+                  placeholders: str = "identifier") -> str:
     """What an agent is told at birth (§3.3).
 
     Only what defines how it can act. The consequences of acting — that blocks
@@ -67,6 +97,12 @@ def system_prompt(agent_id: str, room_id: str, adjacent: list[str],
     then emitted <accept> seven times more often than <mate>, at 0.21%
     validity. What this prompt shows, agents copy — so it shows only actions.
     """
+    if placeholders not in PLACEHOLDER_STYLES:
+        raise ValueError(f"placeholders must be one of {PLACEHOLDER_STYLES}, "
+                         f"got {placeholders!r}")
+    braced = placeholders == "braced"
+    signatures = _SIGNATURES_BRACED if braced else _SIGNATURES
+    examples = _EXAMPLES_BRACED if braced else _EXAMPLES
     tools = list(tools) if tools is not None else list(DEFAULT_TOOLS)
     ordered = [t for t in ALL_TOOLS if t in tools]
 
@@ -75,18 +111,21 @@ def system_prompt(agent_id: str, room_id: str, adjacent: list[str],
         header += f" Adjacent rooms: {', '.join(adjacent) if adjacent else 'none'}."
 
     lines = [header]
-    lines += [_SIGNATURES[t] for t in ordered]
+    lines += [signatures[t] for t in ordered]
 
     blocks = []
     for t in ordered:
-        received, emitted = _EXAMPLES.get(t, (None, None))
+        received, emitted = examples.get(t, (None, None))
         if emitted is None:
             continue
         blocks.append(f"{received}\n{emitted}" if received else emitted)
     if blocks:
         lines.append("")
-        lines.append("Examples. Lines you receive are followed by what you emitted next,\n"
-                     "where sender_id is another agent and your_id is you.")
+        legend = ("where {sender} is another agent and {you} is you"
+                  if braced else
+                  "where sender_id is another agent and your_id is you")
+        lines.append("Examples. Lines you receive are followed by what you "
+                     f"emitted next,\n{legend}.")
         lines.append("")
         lines.append("\n\n".join(blocks))
     return "\n".join(lines)

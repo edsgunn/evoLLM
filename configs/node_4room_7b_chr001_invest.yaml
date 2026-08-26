@@ -1,3 +1,10 @@
+# STATUS: SUPERSEDED — do not submit without checking why
+# Ran as job 6127799. CLOSED — charging parents for their children's
+# adapters adds nothing beyond the eviction fix and left effective
+# population size worse than eviction alone, by suppressing reproduction
+# rather than concentrating it. See
+# runs/node_4room_7b_chr001_invest_6127799/.
+#
 # REPRODUCTION COST. chr001_evict (random_holder) plus parental investment:
 # the two changes are set together because the charge is only a cost under an
 # eviction rule that draws its victim in proportion to blocks held.

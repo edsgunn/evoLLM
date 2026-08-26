@@ -55,7 +55,11 @@ headline result.
 
 1. **Run the machinery.**
    `evollm analyse runs/<run> --permutations 500 --out runs/<run>/ANALYSIS.txt --traits-csv runs/<run>/traits.csv`
-2. **Write `NOTES.md`** from `runs/_TEMPLATE_NOTES.md`. Fill in every core
+2. **Compute the core metrics** with
+   `python -m evollm.analysis.core_metrics runs/<run> runs/<comparison>`.
+   Never compute a table row in a one-off script — add the metric to
+   `src/evollm/analysis/core_metrics.py` so every run's table stays comparable.
+3. **Write `NOTES.md`** from `runs/_TEMPLATE_NOTES.md`. Fill in every core
    metric, even where the answer is "not measured" — a visible gap is worth more
    than a silent one.
 3. **Compare against exactly one run**, named in the header. A run compared
